@@ -50,6 +50,8 @@
 /* Max value supported for XFER_COUNT */
 #define SSP_BUFFER_SIZE		(65536 - 512)
 
+DEFINE_MUTEX(mmc_lock);
+
 struct stmp3xxx_mmc_host {
 	struct device *dev;
 	struct mmc_host *mmc;
@@ -545,6 +547,7 @@ static void stmp3xxx_mmc_request(struct mmc_host *mmc, struct mmc_request *mrq)
 {
 	struct stmp3xxx_mmc_host *host = mmc_priv(mmc);
 
+    mutex_lock(&mmc_lock);
 	dev_dbg(host->dev, "MMC request\n");
 
 	host->mrq = mrq;
@@ -558,6 +561,7 @@ static void stmp3xxx_mmc_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	}
 
 	host->mrq = NULL;
+    mutex_unlock(&mmc_lock);
 	mmc_request_done(mmc, mrq);
 }
 

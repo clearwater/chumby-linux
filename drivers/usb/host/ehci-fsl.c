@@ -28,6 +28,7 @@
 #undef CONFIG_PM
 
 
+
 /* configure so an HC device and id are always provided */
 /* always called with process context; sleeping is OK */
 

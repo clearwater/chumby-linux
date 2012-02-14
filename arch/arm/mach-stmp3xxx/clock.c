@@ -35,6 +35,8 @@
 
 #include "clock.h"
 
+#define MY_IGNORED (1<<16)
+
 static DEFINE_SPINLOCK(clocks_lock);
 
 static struct clk osc_24M;
@@ -458,7 +460,15 @@ static int emi_set_rate(struct clk *clk, u32 rate)
 		saved_ocram = kmalloc(stmp3xxx_ram_funcs_sz, GFP_KERNEL);
 		if (!saved_ocram)
 			return -ENOMEM;
+
+        // Disable interrupts before changing EMI clock
+		local_irq_disable();
+		local_fiq_disable();
+
+        // Preserve OCRAM data to prepare to move DRAM utils into OCRAM
 		memcpy(saved_ocram, scale, stmp3xxx_ram_funcs_sz);
+
+        // Move DRAM utils into OCRAM so we can use them to change freq/settings.
 		memcpy(scale, stmp3xxx_ram_freq_scale, stmp3xxx_ram_funcs_sz);
 
 		sc_data.emi_div = clkctrl_emi;
@@ -466,11 +476,13 @@ static int emi_set_rate(struct clk *clk, u32 rate)
 		sc_data.cur_freq = clk->rate / 1000;
 		sc_data.new_freq = rate / 1000;
 
-		local_irq_disable();
-		local_fiq_disable();
+        // We need the equivalent of "ddi_emi_PrepareForDramSelfRefreshMode()" at this point, prior to
+        // going into self refresh mode, to assure no DRAM accesses occur while in self refresh mode.
 
+        // Change the EMI frequency and settings.
 		scale(&sc_data);
 
+        // Re-enable interrupts.
 		local_fiq_enable();
 		local_irq_enable();
 
@@ -870,8 +882,8 @@ static struct clk lcdif_clk = {
 	.bypass_reg	= HW_CLKCTRL_CLKSEQ_ADDR,
 	.bypass_shift	= 1,
 	.set_parent	= clkseq_set_parent,
-	.flags		= PRESENT_ON_STMP37XX | PRESENT_ON_STMP378X |
-			  NEEDS_SET_PARENT,
+	.flags		= NEEDS_SET_PARENT | PRESENT_ON_STMP37XX | PRESENT_ON_STMP378X,
+//    | NEEDS_SET_PARENT,
 };
 
 static struct clk ssp_clk = {
@@ -1088,7 +1100,6 @@ static struct clk *onchip_clks[] = {
 	&dri_clk,
 	&digctl_clk,
 	&timer_clk,
-	&lcdif_clk,
 	&ssp_clk,
 	&gpmi_clk,
 	&spdif_clk,
@@ -1101,6 +1112,7 @@ static struct clk *onchip_clks[] = {
 	&clk_tv54M,
 	&clk_tv27M,
 	&clk_etm,
+	&lcdif_clk,
 };
 
 static int std_propagate_rate(struct clk *clk)
@@ -1336,6 +1348,8 @@ static int __init clk_init(void)
 		(*clkp)->owner = THIS_MODULE;
 		if ((*clkp)->flags & ENABLED)
 			clk_enable(*clkp);
+        else if ((*clkp)->flags & MY_IGNORED)
+            ;
 		else
 			local_clk_disable(*clkp);
 		if (((*clkp)->flags & NEEDS_INITIALIZATION) &&

@@ -69,21 +69,19 @@ ddi_bc_Status_t ddi_bc_Init(ddi_bc_Cfg_t * pCfg)
 	//--------------------------------------------------------------------------
 	// We can only be initialized if we're in the Uninitialized state.
 	//--------------------------------------------------------------------------
-
 	if (g_ddi_bc_State != DDI_BC_STATE_UNINITIALIZED) {
 		return (DDI_BC_STATUS_ALREADY_INITIALIZED);
 	}
+
 	//--------------------------------------------------------------------------
 	// Check if the battery charger hardware has been disabled by laser fuse.
 	//--------------------------------------------------------------------------
-
 	if (!ddi_power_GetBatteryChargerEnabled())
 		return (DDI_BC_STATUS_HARDWARE_DISABLED);
 
 	//--------------------------------------------------------------------------
 	// Check if the power supply has been set up for a non-rechargeable battery.
 	//--------------------------------------------------------------------------
-
 	switch (ddi_power_GetBatteryMode()) {
 
 	case DDI_POWER_BATT_MODE_LIION:
@@ -101,10 +99,9 @@ ddi_bc_Status_t ddi_bc_Init(ddi_bc_Cfg_t * pCfg)
 	// registers. If not, then none of our writes to those registers will
 	// succeed, which will kind of slow us down...
 	//--------------------------------------------------------------------------
-
-	if (ddi_power_GetPowerClkGate()) {
+	if (ddi_power_GetPowerClkGate())
 		return (DDI_BC_STATUS_CLOCK_GATE_CLOSED);
-	}
+
 	//--------------------------------------------------------------------------
 	// Check the incoming configuration for nonsense.
 	//--------------------------------------------------------------------------
@@ -113,16 +110,16 @@ ddi_bc_Status_t ddi_bc_Init(ddi_bc_Cfg_t * pCfg)
 	// Only permitted charging voltage: 4200mV.
 	//
 
-	if (pCfg->u16ChargingVoltage != DDI_BC_LIION_CHARGING_VOLTAGE) {
+	if (pCfg->u16ChargingVoltage != DDI_BC_LIION_CHARGING_VOLTAGE)
 		return (DDI_BC_STATUS_CFG_BAD_CHARGING_VOLTAGE);
-	}
+
+
 	//
 	// There are 8 LRADC channels.
 	//
-
-	if (pCfg->u8BatteryTempChannel > 7) {
+	if (pCfg->u8BatteryTempChannel > 7)
 		return (DDI_BC_STATUS_CFG_BAD_BATTERY_TEMP_CHANNEL);
-	}
+
 	//--------------------------------------------------------------------------
 	// Accept the configuration.
 	//--------------------------------------------------------------------------
@@ -154,7 +151,6 @@ ddi_bc_Status_t ddi_bc_Init(ddi_bc_Cfg_t * pCfg)
 	//--------------------------------------------------------------------------
 	// Set the bias current source.
 	//--------------------------------------------------------------------------
-
 	{
 		ddi_power_BiasCurrentSource_t Flag;
 
@@ -164,29 +160,29 @@ ddi_bc_Status_t ddi_bc_Init(ddi_bc_Cfg_t * pCfg)
 		    DDI_POWER_EXTERNAL_BIAS_CURRENT;
 
 		ddi_power_SetBiasCurrentSource(Flag);
-
 	}
+
 
 	//--------------------------------------------------------------------------
 	// Turn the charger hardware off. This is a very important initial condition
 	// because we only flip the power switch on the hardware when we make
 	// transitions. Baseline, it needs to be off.
 	//--------------------------------------------------------------------------
-
 	ddi_power_SetChargerPowered(0);
+
 
 	//--------------------------------------------------------------------------
 	// Reset the current ramp. This will jam the current to zero and power off
 	// the charging hardware.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_RampReset();
+
 
 	//--------------------------------------------------------------------------
 	// Move to the Disabled state.
 	//--------------------------------------------------------------------------
-
 	g_ddi_bc_State = DDI_BC_STATE_DISABLED;
+
 
 	//--------------------------------------------------------------------------
 	// Return success.
@@ -195,7 +191,6 @@ ddi_bc_Status_t ddi_bc_Init(ddi_bc_Cfg_t * pCfg)
 	printk("%s: success\n", __func__);
 #endif
 	return (DDI_BC_STATUS_SUCCESS);
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////

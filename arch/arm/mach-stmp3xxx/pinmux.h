@@ -20,6 +20,7 @@
 
 #include <linux/spinlock.h>
 #include <linux/types.h>
+#include <linux/interrupt.h>
 
 /* Pin definitions */
 #include <mach/pins.h>
@@ -101,6 +102,9 @@ void stmp3xxx_release_pin_group(struct pin_group *pin_group, char *label);
 
 /* Configure pin as interrupt source */
 void stmp3xxx_configure_irq(unsigned id, unsigned type);
+
+/* Configure function that gets called on IRQ */
+void stmp3xxx_configure_irq_handler(unsigned id, irq_handler_t handler, void *data);
 
 /* Acknowledge irq in pinctrl registers */
 void stmp3xxx_pin_ack_irq(int irq);

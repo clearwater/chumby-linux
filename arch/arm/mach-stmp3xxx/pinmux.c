@@ -25,6 +25,7 @@
 #include <linux/irq.h>
 #include <mach/hardware.h>
 #include <mach/regs-pinctrl.h>
+#include <linux/interrupt.h>
 #include "pinmux.h"
 
 
@@ -275,6 +276,7 @@ out:
 	spin_unlock(&pbank->lock);
 	return ret;
 }
+EXPORT_SYMBOL(stmp3xxx_request_pin);
 
 void stmp3xxx_set_pin_type_chklock(unsigned id, enum pin_fun fun, int lock)
 {
@@ -327,6 +329,7 @@ void stmp3xxx_release_pin(unsigned id, char *label)
 out:
 	spin_unlock(&pbank->lock);
 }
+EXPORT_SYMBOL(stmp3xxx_release_pin);
 
 int stmp3xxx_request_pin_group(struct pin_group *pin_group, char *label)
 {
@@ -359,6 +362,7 @@ out_err:
 	}
 	return err;
 }
+EXPORT_SYMBOL(stmp3xxx_request_pin_group);
 
 void stmp3xxx_release_pin_group(struct pin_group *pin_group, char *label)
 {
@@ -370,6 +374,7 @@ void stmp3xxx_release_pin_group(struct pin_group *pin_group, char *label)
 		stmp3xxx_release_pin(pin->id, label);
 	}
 }
+EXPORT_SYMBOL(stmp3xxx_release_pin_group);
 
 /**
  * stmp3xxx_configure_irq
@@ -595,15 +600,84 @@ static ssize_t pinmux_all_list(struct sys_device *dev,
 }
 SYSDEV_ATTR(all, 0444, pinmux_all_list, NULL);
 
+
+////////////////////////////////////////////////////////////////////////////////
+// IRQ handlers
+//
+
+static irq_handler_t handlers[STMP3XXX_PINMUX_BANK_SIZE * STMP3XXX_PINMUX_NR_BANKS];
+static void *handler_data[STMP3XXX_PINMUX_BANK_SIZE * STMP3XXX_PINMUX_NR_BANKS];
+
+static irqreturn_t handle_gpio_irq(int irq, void *data)
+{
+	int pin;
+	int start;
+
+	/* Calculate which bank to send notifications to */
+	start = STMP3XXX_PINMUX_BANK_SIZE;
+	if(irq==IRQ_GPIO0)
+		start *= 0;
+	else if(irq==IRQ_GPIO1)
+		start *= 1;
+	else if(irq==IRQ_GPIO2)
+		start *= 2;
+	else {
+		printk(KERN_ERR "Unknown IRQ number: %d\n", irq);
+		return IRQ_HANDLED;
+	}
+
+	/* XXX
+	 * Call every IRQ handler for the specified bank.  We don't know which
+	 * GPIO caused this pin to fire because the status pins are useless
+	 * when using edge detection.  Because of this, we just call every
+	 * handler and hope it does the right thing.
+	 * */
+	for(pin=start; pin<start+STMP3XXX_PINMUX_BANK_SIZE; pin++)
+		if(handlers[pin])
+			(*(handlers[pin]))(irq, handler_data[pin]);
+
+	/* Tell the board we've handled the IRQ. */
+	stmp3xxx_pin_ack_irq(irq);
+
+	return IRQ_HANDLED;
+}
+
+
+void stmp3xxx_configure_irq_handler(unsigned id, irq_handler_t handler, void *data)
+{
+	if(!stmp3xxx_valid_pin(id)) {
+		printk(KERN_ERR "Invalid pin id: %d\n", id);
+		return;
+	}
+	//printk("Routing pin %d to handler %p\n", id, handler);
+	handlers[id]     = handler;
+	handler_data[id] = data;
+}
+EXPORT_SYMBOL(stmp3xxx_configure_irq_handler);
+
 static int __init stmp3xxx_pinmux_init(void)
 {
 	int b;
+	int ret;
 
 	for (b = 0; b < STMP3XXX_PINMUX_NR_BANKS; b++)
 		spin_lock_init(&pinmux_banks[b].lock);
 	sysdev_class_register(&stmp3xxx_pinmux_sysclass);
 	sysdev_register(&stmp3xxx_pinmux_device);
 	sysdev_create_file(&stmp3xxx_pinmux_device, &attr_all);
+
+	/*
+	 * We have many devices that need to take IRQs from GPIOs.  Enable the
+	 * routing of these IRQs.
+	 */
+	if((ret = request_irq(IRQ_GPIO0, handle_gpio_irq, 0, "GPIO 0", NULL)) < 0)
+		printk(KERN_ERR "Unable to request IRQ_GPIO0: %d\n", ret);
+	if((ret = request_irq(IRQ_GPIO1, handle_gpio_irq, 0, "GPIO 1", NULL)) < 0)
+		printk(KERN_ERR "Unable to request IRQ_GPIO1: %d\n", ret);
+	if((ret = request_irq(IRQ_GPIO2, handle_gpio_irq, 0, "GPIO 2", NULL)) < 0)
+		printk(KERN_ERR "Unable to request IRQ_GPIO2: %d\n", ret);
+	printk(KERN_INFO "Initialized chumby GPIO IRQ router\n");
+
 
 	return 0;
 }

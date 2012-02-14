@@ -34,4 +34,7 @@ Now replace the kernel files with those from Chumby
 rm -rf *
 tar -zx --strip-components 1 -f ../../linux-2.6.28.mx233-falconwing-1.0.7-053111
 .tgz
+git add --all
+git commit -m "Replace with kernel source from http://files.chumby.com/source/falconwing/build3454/linux-2.6.28.mx233-falconwing-1.0.7-053
+111.tgz"
 ```

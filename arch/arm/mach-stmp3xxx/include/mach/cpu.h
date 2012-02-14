@@ -30,4 +30,6 @@
 #define cpu_is_stmp378x()	(0)
 #endif
 
+extern int chumby_revision(void);
+
 #endif /* __ASM_PLAT_CPU_H */

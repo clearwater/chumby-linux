@@ -153,8 +153,10 @@ static inline u64 get_jiffies_64(void)
 /*
  * Have the 32 bit jiffies value wrap 5 minutes after boot
  * so jiffies wrap bugs show up earlier.
+ * SMC: No, set it to 0, so that errors indicate how soon after boot they
+ * occur.
  */
-#define INITIAL_JIFFIES ((unsigned long)(unsigned int) (-300*HZ))
+#define INITIAL_JIFFIES ((unsigned long)(unsigned int) (0*HZ))
 
 /*
  * Change timeval to jiffies, trying to avoid the

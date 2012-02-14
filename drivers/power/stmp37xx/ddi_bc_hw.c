@@ -12,6 +12,10 @@
  */
 
 #include "ddi_bc_internal.h"
+#include <mach/lradc.h>
+#include <mach/regs-power.h>
+#include <mach/regs-lradc.h>
+
 
 ////////////////////////////////////////////////////////////////////////////////
 //! \addtogroup ddi_bc
@@ -136,7 +140,6 @@ ddi_bc_Status_t ddi_bc_hwSetBiasCurrentSource(ddi_bc_BiasCurrentSource_t source)
 
 	// TODO: replace all ddi_bc_hwSetBiasCurrentSource() with function  below.
 	return (ddi_bc_Status_t) ddi_power_SetBiasCurrentSource(eSource);
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -240,7 +243,6 @@ uint16_t ddi_bc_hwSetCurrentThreshold(uint16_t u16Threshold)
 {
 	//TODO: replace calls to ddi_bc_hwSetCurrentThreshold with the one below
 	return ddi_power_SetBatteryChargeCurrentThreshold(u16Threshold);
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -380,7 +382,45 @@ void ddi_bc_hwGetDieTemp(int16_t * pLow, int16_t * pHigh)
 ////////////////////////////////////////////////////////////////////////////////
 ddi_bc_Status_t ddi_bc_hwGetBatteryTemp(uint16_t * pReading)
 {
-	return (ddi_bc_Status_t)DDI_BC_STATUS_HARDWARE_DISABLED;
+    uint32_t  ch0Value;
+	uint32_t  retries = 0;
+
+    /* Mux channel 0 to use LRADC0 */
+    HW_LRADC_CTRL4_CLR(BF_LRADC_CTRL4_LRADC0SELECT(0xF));
+    HW_LRADC_CTRL4_SET(BF_LRADC_CTRL4_LRADC0SELECT(0));
+
+    /* Clear the interrupt flag */
+    HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_LRADC0_IRQ);
+    HW_LRADC_CTRL0_SET(BF_LRADC_CTRL0_SCHEDULE(1 << LRADC_CH0));
+
+    /* Wait for conversion to complete */
+    while (!(HW_LRADC_CTRL1_RD() & BM_LRADC_CTRL1_LRADC0_IRQ)) {
+		if(++retries >= 256)
+			break;
+
+		/*
+		 * There's a lockup bug here.  For some reason, the conversion just
+		 * fails to happen, leaving the process that requested it to be
+		 * stuck forever.
+		 * As a workaround, we retry every 0x1f times, and time out
+		 * completely after 0xff tries.
+		 */
+		if(!(HW_LRADC_CTRL1_RD()&BM_LRADC_CTRL1_LRADC0_IRQ) && !(retries&0x1f))
+			HW_LRADC_CTRL0_SET(BF_LRADC_CTRL0_SCHEDULE(1 << LRADC_CH0));
+
+        cpu_relax();
+	}
+
+    /* Clear the interrupt flag again */
+    HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_LRADC0_IRQ);
+
+    /* read temperature value and clr lradc */
+    ch0Value = HW_LRADC_CHn_RD(LRADC_CH0) & BM_LRADC_CHn_VALUE;
+    HW_LRADC_CHn_CLR(LRADC_CH0, BM_LRADC_CHn_VALUE);
+
+    *pReading = ch0Value;
+
+	return (ddi_bc_Status_t)DDI_BC_STATUS_SUCCESS;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

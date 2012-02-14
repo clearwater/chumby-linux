@@ -82,7 +82,9 @@ static void l2cap_sock_timeout(unsigned long arg)
 
 	bh_lock_sock(sk);
 
-	if (sk->sk_state == BT_CONNECT &&
+	if (sk->sk_state == BT_CONNECTED || sk->sk_state == BT_CONFIG)
+		reason = ECONNREFUSED;
+	else if (sk->sk_state == BT_CONNECT &&
 			(l2cap_pi(sk)->link_mode & (L2CAP_LM_AUTH |
 					L2CAP_LM_ENCRYPT | L2CAP_LM_SECURE)))
 		reason = ECONNREFUSED;
@@ -317,6 +319,9 @@ static void l2cap_do_start(struct sock *sk)
 	struct l2cap_conn *conn = l2cap_pi(sk)->conn;
 
 	if (conn->info_state & L2CAP_INFO_FEAT_MASK_REQ_SENT) {
+		if (!(conn->info_state & L2CAP_INFO_FEAT_MASK_REQ_DONE))
+			return;
+
 		if (l2cap_check_link_mode(sk)) {
 			struct l2cap_conn_req req;
 			req.scid = cpu_to_le16(l2cap_pi(sk)->scid);
@@ -443,6 +448,8 @@ static void l2cap_info_timeout(unsigned long arg)
 	struct l2cap_conn *conn = (void *) arg;
 
 	conn->info_ident = 0;
+
+	conn->info_state |= L2CAP_INFO_FEAT_MASK_REQ_DONE;
 
 	l2cap_conn_start(conn);
 }
@@ -1556,6 +1563,9 @@ static inline int l2cap_command_rej(struct l2cap_conn *conn, struct l2cap_cmd_hd
 					cmd->ident == conn->info_ident) {
 		conn->info_ident = 0;
 		del_timer(&conn->info_timer);
+
+		conn->info_state |= L2CAP_INFO_FEAT_MASK_REQ_DONE;
+
 		l2cap_conn_start(conn);
 	}
 
@@ -1626,7 +1636,7 @@ static inline int l2cap_connect_req(struct l2cap_conn *conn, struct l2cap_cmd_hd
 
 	l2cap_pi(sk)->ident = cmd->ident;
 
-	if (conn->info_state & L2CAP_INFO_FEAT_MASK_REQ_SENT) {
+	if (conn->info_state & L2CAP_INFO_FEAT_MASK_REQ_DONE) {
 		if (l2cap_check_link_mode(sk)) {
 			sk->sk_state = BT_CONFIG;
 			result = L2CAP_CR_SUCCESS;
@@ -1700,11 +1710,14 @@ static inline int l2cap_connect_rsp(struct l2cap_conn *conn, struct l2cap_cmd_hd
 		l2cap_pi(sk)->dcid = dcid;
 		l2cap_pi(sk)->conf_state |= L2CAP_CONF_REQ_SENT;
 
+		l2cap_pi(sk)->conf_state &= ~L2CAP_CONF_CONNECT_PEND;
+
 		l2cap_send_cmd(conn, l2cap_get_ident(conn), L2CAP_CONF_REQ,
 					l2cap_build_conf_req(sk, req), req);
 		break;
 
 	case L2CAP_CR_PEND:
+		l2cap_pi(sk)->conf_state |= L2CAP_CONF_CONNECT_PEND;
 		break;
 
 	default:
@@ -1938,10 +1951,13 @@ static inline int l2cap_information_rsp(struct l2cap_conn *conn, struct l2cap_cm
 
 	del_timer(&conn->info_timer);
 
-	if (type == L2CAP_IT_FEAT_MASK)
+	if (type == L2CAP_IT_FEAT_MASK) {
 		conn->feat_mask = get_unaligned_le32(rsp->data);
 
-	l2cap_conn_start(conn);
+		conn->info_state |= L2CAP_INFO_FEAT_MASK_REQ_DONE;
+
+		l2cap_conn_start(conn);
+	}
 
 	return 0;
 }
@@ -2189,6 +2205,16 @@ static int l2cap_disconn_ind(struct hci_conn *hcon, u8 reason)
 	return 0;
 }
 
+static inline void l2cap_check_encryption(struct sock *sk, u8 encrypt)
+{
+	if (encrypt == 0x00) {
+		l2cap_sock_clear_timer(sk);
+		l2cap_sock_set_timer(sk, HZ * 5);
+	} else {
+		l2cap_sock_clear_timer(sk);
+	}
+}
+
 static int l2cap_auth_cfm(struct hci_conn *hcon, u8 status)
 {
 	struct l2cap_chan_list *l;
@@ -2208,6 +2234,11 @@ static int l2cap_auth_cfm(struct hci_conn *hcon, u8 status)
 		struct l2cap_pinfo *pi = l2cap_pi(sk);
 
 		bh_lock_sock(sk);
+
+		if (l2cap_pi(sk)->conf_state & L2CAP_CONF_CONNECT_PEND) {
+			bh_unlock_sock(sk);
+			continue;
+		}
 
 		if ((pi->link_mode & (L2CAP_LM_ENCRYPT | L2CAP_LM_SECURE)) &&
 					!(hcon->link_mode & HCI_LM_ENCRYPT) &&
@@ -2279,11 +2310,16 @@ static int l2cap_encrypt_cfm(struct hci_conn *hcon, u8 status, u8 encrypt)
 
 		bh_lock_sock(sk);
 
+		if (l2cap_pi(sk)->conf_state & L2CAP_CONF_CONNECT_PEND) {
+			bh_unlock_sock(sk);
+			continue;
+		}
+
 		if ((pi->link_mode & (L2CAP_LM_ENCRYPT | L2CAP_LM_SECURE)) &&
 					(sk->sk_state == BT_CONNECTED ||
 						sk->sk_state == BT_CONFIG) &&
 						!status && encrypt == 0x00) {
-			__l2cap_sock_close(sk, ECONNREFUSED);
+			l2cap_check_encryption(sk, encrypt);
 			bh_unlock_sock(sk);
 			continue;
 		}

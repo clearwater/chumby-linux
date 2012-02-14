@@ -163,7 +163,7 @@ static int init_panel(struct device *dev, dma_addr_t phys, int memsize,
 	clk_enable(clk_tv108M_ng);
 	clk_enable(clk_tv27M);
 
-	tvenc_mode = pentry->x_res == NTSC_Y_RES ? TVENC_MODE_NTSC : \
+	tvenc_mode = pentry->x_res == NTSC_X_RES ? TVENC_MODE_NTSC : \
 		     TVENC_MODE_PAL;
 
 	init_tvenc_hw(tvenc_mode);
@@ -231,9 +231,9 @@ static int blank_panel(int blank)
 static struct stmp3xxx_platform_fb_entry ntsc_fb_entry = {
 	.name		= "tvenc_ntsc",
 	/* x/y swapped */
-	.x_res		= NTSC_Y_RES,
-	.y_res		= NTSC_X_RES,
-	.bpp		= 32,
+	.x_res		= NTSC_X_RES,
+	.y_res		= NTSC_Y_RES,
+	.bpp		= 16,
 	/* the pix_clk should be near 27Mhz for proper syncronization */
 	.cycle_time_ns	= 74,
 	.lcd_type	= STMP3XXX_LCD_PANEL_DVI,
@@ -247,9 +247,9 @@ static struct stmp3xxx_platform_fb_entry ntsc_fb_entry = {
 static struct stmp3xxx_platform_fb_entry pal_fb_entry = {
 	.name		= "tvenc_pal",
 	/* x/y swapped */
-	.x_res		= PAL_Y_RES,
-	.y_res		= PAL_X_RES,
-	.bpp		= 32,
+	.x_res		= PAL_X_RES,
+	.y_res		= PAL_Y_RES,
+	.bpp		= 16,
 	/* the pix_clk should be near 27Mhz for proper syncronization */
 	.cycle_time_ns	= 74,
 	.lcd_type	= STMP3XXX_LCD_PANEL_DVI,

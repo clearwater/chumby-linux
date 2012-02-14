@@ -13,6 +13,19 @@ menuconfig MISC_DEVICES
 
 if MISC_DEVICES
 
+config ANDROID_PMEM
+	bool "Android pmem allocator"
+	default y
+
+config TIMED_OUTPUT
+	bool "Timed output class driver"
+	default y
+
+config TIMED_GPIO
+	bool "Android timed gpio driver"
+	depends on GENERIC_GPIO && TIMED_OUTPUT
+	default y
+
 config ATMEL_PWM
 	tristate "Atmel AT32/AT91 PWM support"
 	depends on AVR32 || ARCH_AT91SAM9263 || ARCH_AT91SAM9RL || ARCH_AT91CAP9
@@ -54,6 +67,10 @@ config ATMEL_TCB_CLKSRC_BLOCK
 	  choice of which one to use for the clock framework.  The other
 	  TC can be used for other purposes, such as PWM generation and
 	  interval timing.
+
+config BINDER_IPC
+	tristate "Binder IPC Driver"
+	default y
 
 config IBM_ASM
 	tristate "Device driver for IBM RSA service processor"
@@ -447,6 +464,13 @@ config ENCLOSURE_SERVICES
 	  driver (SCSI/ATA) which supports enclosures
 	  or a SCSI enclosure device (SES) to use these services.
 
+config KERNEL_DEBUGGER_CORE
+	bool "Kernel Debugger Core"
+	default n
+	---help---
+	  Generic kernel debugging command processor used by low level
+	  (interrupt context) platform-specific debuggers.
+
 config SGI_XP
 	tristate "Support communication between SGI SSIs"
 	depends on NET
@@ -497,6 +521,81 @@ config SGI_GRU_DEBUG
 	---help---
 	This option enables addition debugging code for the SGI GRU driver. If
 	you are unsure, say N.
+
+
+config LOW_MEMORY_KILLER
+	tristate "Low Memory Killer"
+	---help---
+	Register processes to be killed when memory is low
+
+config LOGGER
+	bool "High-speed in-kernel logging driver"
+	default y
+
+config UID_STAT
+	bool "UID based statistics tracking exported to /proc/uid_stat"
+	default n
+
+config ANDROID_RAM_CONSOLE
+	bool "RAM buffer console"
+	default n
+
+config ANDROID_RAM_CONSOLE_ENABLE_VERBOSE
+	bool "Enable verbose console messages"
+	default y
+	depends on ANDROID_RAM_CONSOLE
+
+menuconfig ANDROID_RAM_CONSOLE_ERROR_CORRECTION
+	bool "Enable error correction"
+	default n
+	depends on ANDROID_RAM_CONSOLE
+	depends on !ANDROID_RAM_CONSOLE_EARLY_INIT
+	select REED_SOLOMON
+	select REED_SOLOMON_ENC8
+	select REED_SOLOMON_DEC8
+
+if ANDROID_RAM_CONSOLE_ERROR_CORRECTION
+
+config ANDROID_RAM_CONSOLE_ERROR_CORRECTION_DATA_SIZE
+	int "Data data size"
+	default 128
+	help
+	Must be a power of 2.
+
+config ANDROID_RAM_CONSOLE_ERROR_CORRECTION_ECC_SIZE
+	int "ECC size"
+	default 16
+
+config ANDROID_RAM_CONSOLE_ERROR_CORRECTION_SYMBOL_SIZE
+	int "Symbol size"
+	default 8
+
+config ANDROID_RAM_CONSOLE_ERROR_CORRECTION_POLYNOMIAL
+	hex "Polynomial"
+	default 0x19 if (ANDROID_RAM_CONSOLE_ERROR_CORRECTION_SYMBOL_SIZE = 4)
+	default 0x29 if (ANDROID_RAM_CONSOLE_ERROR_CORRECTION_SYMBOL_SIZE = 5)
+	default 0x61 if (ANDROID_RAM_CONSOLE_ERROR_CORRECTION_SYMBOL_SIZE = 6)
+	default 0x89 if (ANDROID_RAM_CONSOLE_ERROR_CORRECTION_SYMBOL_SIZE = 7)
+	default 0x11d if (ANDROID_RAM_CONSOLE_ERROR_CORRECTION_SYMBOL_SIZE = 8)
+
+endif #ANDROID_RAM_CONSOLE_ERROR_CORRECTION
+
+config ANDROID_RAM_CONSOLE_EARLY_INIT
+	bool "Start ram console early"
+	default n
+	depends on ANDROID_RAM_CONSOLE
+
+config ANDROID_RAM_CONSOLE_EARLY_ADDR
+	hex "RAM console virtual address"
+	default 0
+	depends on ANDROID_RAM_CONSOLE_EARLY_INIT
+
+config ANDROID_RAM_CONSOLE_EARLY_SIZE
+	hex "RAM console buffer size"
+	default 0
+	depends on ANDROID_RAM_CONSOLE_EARLY_INIT
+
+
 
 source "drivers/misc/c2port/Kconfig"
 

@@ -347,7 +347,7 @@ static inline void hci_conn_put(struct hci_conn *conn)
 		unsigned long timeo;
 		if (conn->type == ACL_LINK) {
 			del_timer(&conn->idle_timer);
-			if (conn->state == BT_CONNECTED) {
+			if (conn->state == BT_CONNECTED || conn->state == BT_CONNECT) {
 				timeo = msecs_to_jiffies(HCI_DISCONN_TIMEOUT);
 				if (!conn->out)
 					timeo *= 5;

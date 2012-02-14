@@ -129,6 +129,12 @@ struct pid_entry {
 		NULL, &proc_single_file_operations,	\
 		{ .proc_show = &proc_##OTYPE } )
 
+/* ANDROID is for special files in /proc. */
+#define ANDROID(NAME, MODE, OTYPE)			\
+	NOD(NAME, (S_IFREG|(MODE)),			\
+		&proc_##OTYPE##_inode_operations,	\
+		&proc_##OTYPE##_operations, {})
+
 /*
  * Count the number of hardlinks for the pid_entry table, excluding the .
  * and .. links.
@@ -1030,6 +1036,33 @@ static ssize_t oom_adjust_write(struct file *file, const char __user *buf,
 		return -EIO;
 	return end - buffer;
 }
+
+static int oom_adjust_permission(struct inode *inode, int mask)
+{
+	uid_t uid;
+	struct task_struct *p = get_proc_task(inode);
+	if(p) {
+		uid = p->uid;
+		put_task_struct(p);
+	}
+
+	/*
+	 * System Server (uid == 1000) is granted access to oom_adj of all 
+	 * android applications (uid > 10000) as and services (uid >= 1000)
+	 */
+	if (p && (current->fsuid == 1000) && (uid >= 1000)) {
+		if (inode->i_mode >> 6 & mask) {
+			return 0;
+		}
+	}
+
+	/* Fall back to default. */
+	return generic_permission(inode, mask, NULL);
+}
+
+static const struct inode_operations proc_oom_adjust_inode_operations = {
+	.permission	= oom_adjust_permission,
+};
 
 static const struct file_operations proc_oom_adjust_operations = {
 	.read		= oom_adjust_read,
@@ -2504,7 +2537,7 @@ static const struct pid_entry tgid_base_stuff[] = {
 	REG("cgroup",  S_IRUGO, cgroup),
 #endif
 	INF("oom_score",  S_IRUGO, oom_score),
-	REG("oom_adj",    S_IRUGO|S_IWUSR, oom_adjust),
+	ANDROID("oom_adj",S_IRUGO|S_IWUSR, oom_adjust),
 #ifdef CONFIG_AUDITSYSCALL
 	REG("loginuid",   S_IWUSR|S_IRUGO, loginuid),
 	REG("sessionid",  S_IRUGO, sessionid),

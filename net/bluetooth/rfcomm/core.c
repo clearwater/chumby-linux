@@ -1739,6 +1739,9 @@ static inline void rfcomm_process_dlcs(struct rfcomm_session *s)
 			continue;
 		}
 
+		if (test_bit(RFCOMM_SEC_PENDING, &d->flags))
+			continue;
+
 		if (test_bit(RFCOMM_TX_THROTTLED, &s->flags))
 			continue;
 
@@ -2004,11 +2007,19 @@ static void rfcomm_encrypt_cfm(struct hci_conn *conn, u8 status, u8 encrypt)
 	list_for_each_safe(p, n, &s->dlcs) {
 		d = list_entry(p, struct rfcomm_dlc, list);
 
+		if (test_and_clear_bit(RFCOMM_SEC_PENDING, &d->flags)) {
+			rfcomm_dlc_clear_timer(d);
+			if (status || encrypt == 0x00) {
+				__rfcomm_dlc_close(d, ECONNREFUSED);
+				continue;
+			}
+		}
+
 		if ((d->link_mode & (RFCOMM_LM_ENCRYPT | RFCOMM_LM_SECURE)) &&
-					(d->state == BT_CONNECTED ||
-						d->state == BT_CONFIG) &&
+					d->state == BT_CONNECTED &&
 						!status && encrypt == 0x00) {
-			__rfcomm_dlc_close(d, ECONNREFUSED);
+			set_bit(RFCOMM_SEC_PENDING, &d->flags);
+			rfcomm_dlc_set_timer(d, RFCOMM_AUTH_TIMEOUT);
 			continue;
 		}
 

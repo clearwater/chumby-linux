@@ -2122,6 +2122,16 @@ config FB_MB862XX_LIME
 	---help---
 	  Framebuffer support for Fujitsu Lime GDC on host CPU bus.
 
+config FB_CHUMBYFBFW
+	tristate "Chumby Falconwing Overlay-enabled framebuffer driver"
+	depends on FB && ARCH_STMP378X
+	select FB_CFB_FILLRECT
+	select FB_CFB_COPYAREA
+	select FB_CFB_IMAGEBLIT
+	---help---
+	  Say Y here to enable the Chumby two-level framebuffer support.
+
+
 config FB_PRE_INIT_FB
 	bool "Don't reinitialize, use bootloader's GDC/Display configuration"
 	depends on FB_MB862XX_LIME

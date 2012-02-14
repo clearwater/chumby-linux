@@ -1,18 +1,9 @@
-/*
- * Copyright 2008-2009 Freescale Semiconductor, Inc. All Rights Reserved.
- */
-
-/*
- * The code contained herein is licensed under the GNU General Public
- * License. You may obtain a copy of the GNU General Public License
- * Version 2 or later at the following locations:
+ /* Copyright (C) 2004-2006, Advanced Micro Devices, Inc.
  *
- * http://www.opensource.org/licenses/gpl-license.html
- * http://www.gnu.org/copyleft/gpl.html
- */
-/* 
- * Based on geode-aes.c 
- * Copyright (C) 2004-2006, Advanced Micro Devices, Inc.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #include <linux/module.h>
@@ -168,6 +159,18 @@ static void dcp_perform_op(struct stmp3xxx_dcp_op *op)
 	dma_addr_t pkt_phys;
 	u32 stat;
 
+    /*
+    printk("Performing crypto operation.  Flags: 0x%08x\n", op->flags);
+    if ((op->flags & STMP3XXX_DCP_OTPKEY) == 0)
+        printk("Using specified key\n");
+    else
+        printk("Using OTP!!!\n");
+    */
+	if(!sdcp) {
+		printk(KERN_WARNING "Global sdcp not set up yet!\n");
+		return;
+	}
+
 	pkt1 = BM_DCP_PACKET1_DECR_SEMAPHORE | BM_DCP_PACKET1_INTERRUPT;
 
 	switch (op->flags & STMP3XXX_DCP_MODE_MASK) {
@@ -180,6 +183,8 @@ static void dcp_perform_op(struct stmp3xxx_dcp_op *op)
 		pkt1 |= BM_DCP_PACKET1_ENABLE_CIPHER;
 		if ((op->flags & STMP3XXX_DCP_OTPKEY) == 0)
 			pkt1 |= BM_DCP_PACKET1_PAYLOAD_KEY;
+		else
+		  pkt1 |= BM_DCP_PACKET1_OTP_KEY;
 		if (op->flags & STMP3XXX_DCP_ENC)
 			pkt1 |= BM_DCP_PACKET1_CIPHER_ENCRYPT;
 		if (op->flags & STMP3XXX_DCP_CBC_INIT)
@@ -239,6 +244,21 @@ static void dcp_perform_op(struct stmp3xxx_dcp_op *op)
 		dev_err(sdcp->dev, "Unable to map packet descriptor\n");
 		return;
 	}
+#if 0
+	{
+	  int i;
+	  printk( KERN_DEBUG "Crypto work table: \n" );
+	  printk( KERN_DEBUG "Control 1: %08lx\n", pkt->pkt1 );
+	  printk( KERN_DEBUG "Control 2: %08lx\n", pkt->pkt2 );
+	  printk( KERN_DEBUG "Size: %ld\n", pkt->size );
+	  printk( KERN_DEBUG "Src: %08lx\n", (unsigned long) pkt->pSrc );
+	  printk( KERN_DEBUG "Dst: %08lx\n", (unsigned long) pkt->pDst );
+	  printk( KERN_DEBUG "Packet: \n" );
+	  for( i = 0; i < 8; i++ ) {
+	    printk( KERN_DEBUG "%x: %lx\n", i, ((unsigned int *)phys_to_virt(pkt->pPayload))[i] );
+	  }
+	}
+#endif
 
 	/* submit the work */
 	mutex_lock(mutex);
@@ -311,6 +331,7 @@ static void dcp_aes_encrypt(struct crypto_tfm *tfm, u8 *out, const u8 *in)
 {
 	struct stmp3xxx_dcp *sdcp = global_sdcp;
 	struct stmp3xxx_dcp_op *op = crypto_tfm_ctx(tfm);
+    int use_otp = op->flags&STMP3XXX_DCP_OTPKEY;
 
 	if (unlikely(op->cipher.keylen != AES_KEYSIZE_128)) {
 		crypto_cipher_encrypt_one(op->fallback.cip, out, in);
@@ -319,7 +340,7 @@ static void dcp_aes_encrypt(struct crypto_tfm *tfm, u8 *out, const u8 *in)
 
 	op->src = (void *) in;
 	op->dst = (void *) out;
-	op->flags = STMP3XXX_DCP_AES | STMP3XXX_DCP_ENC | STMP3XXX_DCP_ECB;
+	op->flags = STMP3XXX_DCP_AES | STMP3XXX_DCP_ENC | STMP3XXX_DCP_ECB | use_otp;
 	op->len = AES_KEYSIZE_128;
 
 	/* map the data */
@@ -359,15 +380,18 @@ static void dcp_aes_decrypt(struct crypto_tfm *tfm, u8 *out, const u8 *in)
 {
 	struct stmp3xxx_dcp *sdcp = global_sdcp;
 	struct stmp3xxx_dcp_op *op = crypto_tfm_ctx(tfm);
+    int use_otp = op->flags&STMP3XXX_DCP_OTPKEY;
 
 	if (unlikely(op->cipher.keylen != AES_KEYSIZE_128)) {
 		crypto_cipher_decrypt_one(op->fallback.cip, out, in);
 		return;
 	}
 
+
+
 	op->src = (void *) in;
 	op->dst = (void *) out;
-	op->flags = STMP3XXX_DCP_AES | STMP3XXX_DCP_DEC | STMP3XXX_DCP_ECB;
+	op->flags = STMP3XXX_DCP_AES | STMP3XXX_DCP_DEC | STMP3XXX_DCP_ECB | use_otp;
 	op->len = AES_KEYSIZE_128;
 
 	/* map the data */
@@ -553,6 +577,7 @@ dcp_aes_ecb_decrypt(struct blkcipher_desc *desc,
 	struct stmp3xxx_dcp_op *op = crypto_blkcipher_ctx(desc->tfm);
 	struct blkcipher_walk walk;
 	int err;
+    int use_otp = desc->flags&STMP3XXX_DCP_OTPKEY;
 
 	if (unlikely(op->cipher.keylen != AES_KEYSIZE_128))
 		return fallback_blk_dec(desc, dst, src, nbytes);
@@ -572,7 +597,7 @@ dcp_aes_ecb_decrypt(struct blkcipher_desc *desc,
 		op->src = walk.src.virt.addr,
 		op->dst = walk.dst.virt.addr;
 		op->flags = STMP3XXX_DCP_AES | STMP3XXX_DCP_DEC |
-				STMP3XXX_DCP_ECB;
+				STMP3XXX_DCP_ECB | use_otp;
 		op->len = nbytes - (nbytes % AES_KEYSIZE_128);
 
 		/* map the data */
@@ -621,6 +646,7 @@ dcp_aes_ecb_encrypt(struct blkcipher_desc *desc,
 	struct stmp3xxx_dcp_op *op = crypto_blkcipher_ctx(desc->tfm);
 	struct blkcipher_walk walk;
 	int err, ret;
+    int use_otp = desc->flags&STMP3XXX_DCP_OTPKEY;
 
 	if (unlikely(op->cipher.keylen != AES_KEYSIZE_128))
 		return fallback_blk_enc(desc, dst, src, nbytes);
@@ -642,7 +668,7 @@ dcp_aes_ecb_encrypt(struct blkcipher_desc *desc,
 		op->src = walk.src.virt.addr,
 		op->dst = walk.dst.virt.addr;
 		op->flags = STMP3XXX_DCP_AES | STMP3XXX_DCP_ENC |
-			    STMP3XXX_DCP_ECB;
+			    STMP3XXX_DCP_ECB | use_otp;
 		op->len = nbytes - (nbytes % AES_KEYSIZE_128);
 
 		/* map the data */
@@ -717,6 +743,7 @@ dcp_aes_cbc_decrypt(struct blkcipher_desc *desc,
 	struct stmp3xxx_dcp_op *op = crypto_blkcipher_ctx(desc->tfm);
 	struct blkcipher_walk walk;
 	int err, blockno;
+    int use_otp = desc->flags&STMP3XXX_DCP_OTPKEY;
 
 	if (unlikely(op->cipher.keylen != AES_KEYSIZE_128))
 		return fallback_blk_dec(desc, dst, src, nbytes);
@@ -729,7 +756,7 @@ dcp_aes_cbc_decrypt(struct blkcipher_desc *desc,
 		op->src = walk.src.virt.addr,
 		op->dst = walk.dst.virt.addr;
 		op->flags = STMP3XXX_DCP_AES | STMP3XXX_DCP_DEC |
-			    STMP3XXX_DCP_CBC;
+			    STMP3XXX_DCP_CBC | use_otp;
 		if (blockno == 0) {
 			op->flags |= STMP3XXX_DCP_CBC_INIT;
 			memcpy(op->cipher.key + AES_KEYSIZE_128, walk.iv,
@@ -797,6 +824,7 @@ dcp_aes_cbc_encrypt(struct blkcipher_desc *desc,
 	struct stmp3xxx_dcp_op *op = crypto_blkcipher_ctx(desc->tfm);
 	struct blkcipher_walk walk;
 	int err, ret, blockno;
+    int use_otp = desc->flags&STMP3XXX_DCP_OTPKEY;
 
 	if (unlikely(op->cipher.keylen != AES_KEYSIZE_128))
 		return fallback_blk_enc(desc, dst, src, nbytes);
@@ -810,7 +838,7 @@ dcp_aes_cbc_encrypt(struct blkcipher_desc *desc,
 		op->src = walk.src.virt.addr,
 		op->dst = walk.dst.virt.addr;
 		op->flags = STMP3XXX_DCP_AES | STMP3XXX_DCP_ENC |
-			    STMP3XXX_DCP_CBC;
+			    STMP3XXX_DCP_CBC | use_otp;
 		if (blockno == 0) {
 			op->flags |= STMP3XXX_DCP_CBC_INIT;
 			memcpy(op->cipher.key + AES_KEYSIZE_128, walk.iv,
@@ -1225,32 +1253,6 @@ static int stmp3xxx_dcp_probe(struct platform_device *pdev)
 		init_completion(&sdcp->op_wait[i]);
 	}
 
-	ret = crypto_register_alg(&dcp_aes_alg);
-	if (ret != 0)  {
-		dev_err(&pdev->dev, "Failed to register aes crypto\n");
-		goto err_kfree;
-	}
-
-	ret = crypto_register_alg(&dcp_aes_ecb_alg);
-	if (ret != 0)  {
-		dev_err(&pdev->dev, "Failed to register aes ecb crypto\n");
-		goto err_unregister_aes;
-	}
-
-	ret = crypto_register_alg(&dcp_aes_cbc_alg);
-	if (ret != 0)  {
-		dev_err(&pdev->dev, "Failed to register aes cbc crypto\n");
-		goto err_unregister_aes_ecb;
-	}
-
-#ifndef DISABLE_SHA1
-	ret = crypto_register_alg(&dcp_sha1_alg);
-	if (ret != 0)  {
-		dev_err(&pdev->dev, "Failed to register aes cbc crypto\n");
-		goto err_unregister_aes_cbc;
-	}
-#endif
-
 	platform_set_drvdata(pdev, sdcp);
 
 	/* Soft reset and remove the clock gate */
@@ -1309,6 +1311,32 @@ static int stmp3xxx_dcp_probe(struct platform_device *pdev)
 	}
 
 	global_sdcp = sdcp;
+
+	ret = crypto_register_alg(&dcp_aes_alg);
+	if (ret != 0)  {
+		dev_err(&pdev->dev, "Failed to register aes crypto\n");
+		goto err_kfree;
+	}
+
+	ret = crypto_register_alg(&dcp_aes_ecb_alg);
+	if (ret != 0)  {
+		dev_err(&pdev->dev, "Failed to register aes ecb crypto\n");
+		goto err_unregister_aes;
+	}
+
+	ret = crypto_register_alg(&dcp_aes_cbc_alg);
+	if (ret != 0)  {
+		dev_err(&pdev->dev, "Failed to register aes cbc crypto\n");
+		goto err_unregister_aes_ecb;
+	}
+
+#ifndef DISABLE_SHA1
+	ret = crypto_register_alg(&dcp_sha1_alg);
+	if (ret != 0)  {
+		dev_err(&pdev->dev, "Failed to register aes cbc crypto\n");
+		goto err_unregister_aes_cbc;
+	}
+#endif
 
 	dev_notice(&pdev->dev, "DCP crypto enabled.!\n");
 	return 0;

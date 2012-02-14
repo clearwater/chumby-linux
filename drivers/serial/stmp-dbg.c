@@ -550,6 +550,91 @@ static int stmpdbg_verify_port(struct uart_port *port,
 	return ret;
 }
 
+
+#ifdef CONFIG_CONSOLE_POLL
+/*
+ * Console polling routines for writing and reading from the uart while
+ * in an interrupt or debug context.
+ */
+static void stmpdbg_put_poll_char(struct uart_port *port, unsigned char c);
+static int stmpdbg_get_poll_char(struct uart_port *port);
+
+/*
+static int stmpdbg_get_poll_char(struct uart_port *port)
+{
+	struct uart_stmpdbg_port *uap = (struct uart_stmpdbg_port *)port;
+    int old_mask = __raw_readl(uap->port.membase + UART011_IMSC);
+    int c;
+    char *message = "Waiting for connection...\n";
+    while(*message) {
+        stmpdbg_put_poll_char(port, *message);
+        message++;
+    }
+
+    // Disable interrupts for RX.
+    old_mask = __raw_writel(old_mask & 0xffff0000,
+            uap->port.membase + UART011_IMSC);
+
+    while (__raw_readl(uap->port.membase + UART01x_FR) & UART01x_FR_RXFE)
+        barrier();
+
+    // Read the character that's available.
+    c = __raw_readl(uap->port.membase + UART01x_DR) & 0x000000ff;
+
+    // Re-enable interrupts.
+    __raw_writel(old_mask, uap->port.membase + UART011_IMSC);
+    return c;
+}
+
+
+static void stmpdbg_put_poll_char(struct uart_port *port, unsigned char c)
+{
+	struct uart_stmpdbg_port *uap = (struct uart_stmpdbg_port *)port;
+    int old_mask = __raw_readl(uap->port.membase + UART011_IMSC);
+
+    // Disable interrupts for TX.
+    old_mask = __raw_writel(old_mask & 0xffff0000,
+            uap->port.membase + UART011_IMSC);
+
+    // Wait for the buffer to empty.
+    while (__raw_readl(uap->port.membase + UART01x_FR) & UART01x_FR_TXFF)
+        barrier();
+
+    // Send the character out the port.
+    __raw_writel(c, uap->port.membase + UART01x_DR);
+
+    // Re-enable interrupts.
+    __raw_writel(old_mask, uap->port.membase + UART011_IMSC);
+}
+*/
+
+static int stmpdbg_get_poll_char(struct uart_port *port)
+{
+	struct uart_stmpdbg_port *uap = (struct uart_stmpdbg_port *)port;
+    unsigned int status;
+
+    do {
+        status = readw(uap->port.membase + UART01x_FR);
+    } while (status & UART01x_FR_RXFE);
+
+    return readw(uap->port.membase + UART01x_DR);
+}
+
+static void stmpdbg_put_poll_char(struct uart_port *port,
+             unsigned char ch)
+{
+	struct uart_stmpdbg_port *uap = (struct uart_stmpdbg_port *)port;
+
+    while (readw(uap->port.membase + UART01x_FR) & UART01x_FR_TXFF)
+        barrier();
+
+    writew(ch, uap->port.membase + UART01x_DR);
+}
+
+#endif /* CONFIG_CONSOLE_POLL */
+
+
+
 static struct uart_ops stmpdbg_pops = {
 	.tx_empty	= stmpdbg_tx_empty,
 	.set_mctrl	= stmpdbg_set_mctrl,
@@ -567,6 +652,10 @@ static struct uart_ops stmpdbg_pops = {
 	.request_port	= stmpdbg_request_port,
 	.config_port	= stmpdbg_config_port,
 	.verify_port	= stmpdbg_verify_port,
+#ifdef CONFIG_CONSOLE_POLL
+    .poll_get_char = stmpdbg_get_poll_char,
+    .poll_put_char = stmpdbg_put_poll_char,
+#endif
 };
 
 static struct uart_stmpdbg_port stmpdbg_ports[UART_NR] = {
@@ -587,6 +676,9 @@ static struct uart_stmpdbg_port stmpdbg_ports[UART_NR] = {
 };
 
 #ifdef CONFIG_SERIAL_STMP_DBG_CONSOLE
+
+
+
 
 static void
 stmpdbg_console_write(struct console *co, const char *s, unsigned int count)
@@ -831,7 +923,11 @@ static void __exit stmpdbg_exit(void)
 	uart_unregister_driver(&stmpdbg_reg);
 }
 
+#ifdef MODULE
 module_init(stmpdbg_init);
+#else
+subsys_initcall(stmpdbg_init);
+#endif
 module_exit(stmpdbg_exit);
 module_param(force_cd, int, 0644);
 MODULE_AUTHOR("ARM Ltd/Deep Blue Solutions Ltd/Sigmatel Inc");

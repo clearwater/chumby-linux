@@ -30,6 +30,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "ddi_bc_internal.h"
+#define CHLOG(format, arg...)            \
+    printk("power/ddi_bc_api.c - %s():%d - " format, __func__, __LINE__, ## arg)
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // Variables
@@ -117,18 +120,24 @@ void ddi_bc_ShutDown()
 ////////////////////////////////////////////////////////////////////////////////
 ddi_bc_Status_t ddi_bc_StateMachine()
 {
+    static int last_sm = -1;
 
 	//--------------------------------------------------------------------------
 	// Check if we've been initialized yet.
 	//--------------------------------------------------------------------------
 
 	if (g_ddi_bc_State == DDI_BC_STATE_UNINITIALIZED) {
+        CHLOG("state machine not initialized!\n");
 		return (DDI_BC_STATUS_NOT_INITIALIZED);
 	}
 	//--------------------------------------------------------------------------
 	// Execute the function for the current state.
 	//--------------------------------------------------------------------------
 
+    if(last_sm != g_ddi_bc_State) {
+        CHLOG("Switching sm from %d to %d\n", last_sm, g_ddi_bc_State);
+        last_sm = g_ddi_bc_State;
+    }
 	return (stateFunctionTable[g_ddi_bc_State] ());
 
 }

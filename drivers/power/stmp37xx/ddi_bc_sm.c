@@ -26,7 +26,14 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include <mach/ddi_bc.h>
+#include <mach/cpu.h>
 #include "ddi_bc_internal.h"
+
+#define CHLOG(format, arg...)            \
+    printk("power/ddi_bc_sm.c - %s():%d - " format, __func__, __LINE__, ## arg)
+#define is_battery_present() ((chumby_revision()!=0)&&(chumby_revision()!=7)&&(get_battery_temp()<3200))
+
+
 
 #include <linux/delay.h>
 
@@ -69,12 +76,15 @@ static ddi_bc_Status_t ddi_bc_ToppingOff(void);
 static ddi_bc_Status_t ddi_bc_DcdcModeWaitingToCharge(void);
 
 ddi_bc_Status_t(*const (stateFunctionTable[])) (void) = {
-ddi_bc_Uninitialized,
-	    ddi_bc_Broken,
-	    ddi_bc_Disabled,
-	    ddi_bc_WaitingToCharge,
-	    ddi_bc_Conditioning,
-	    ddi_bc_Charging, ddi_bc_ToppingOff, ddi_bc_DcdcModeWaitingToCharge};
+    ddi_bc_Uninitialized,
+    ddi_bc_Broken,
+    ddi_bc_Disabled,
+    ddi_bc_WaitingToCharge,
+    ddi_bc_Conditioning,
+    ddi_bc_Charging,
+    ddi_bc_ToppingOff,
+    ddi_bc_DcdcModeWaitingToCharge,
+};
 
 // Used by states that need to watch the time.
 uint32_t g_ddi_bc_u32StateTimer = 0;
@@ -96,6 +106,13 @@ ddi_bc_BrokenReason_t ddi_bc_gBrokenReason = DDI_BC_BROKEN_UNINITIALIZED;
 ////////////////////////////////////////////////////////////////////////////////
 // Code
 ////////////////////////////////////////////////////////////////////////////////
+
+static inline int get_battery_temp() {
+    unsigned short battery_temp;
+    ddi_bc_hwGetBatteryTemp(&battery_temp);
+    return battery_temp;
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 //!
@@ -160,19 +177,16 @@ static void TransitionToWaitingToCharge(void)
 	//--------------------------------------------------------------------------
 	// Reset the state timer.
 	//--------------------------------------------------------------------------
-
 	g_ddi_bc_u32StateTimer = 0;
 
 	//--------------------------------------------------------------------------
 	// Reset the current ramp.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_RampReset();
 
 	//--------------------------------------------------------------------------
 	// Move to the Waiting to Charge state.
 	//--------------------------------------------------------------------------
-
 	g_ddi_bc_State = DDI_BC_STATE_WAITING_TO_CHARGE;
 
 #ifdef CONFIG_POWER_SUPPLY_DEBUG
@@ -196,19 +210,16 @@ static void TransitionToConditioning(void)
 	//--------------------------------------------------------------------------
 	// Reset the state timer.
 	//--------------------------------------------------------------------------
-
 	g_ddi_bc_u32StateTimer = 0;
 
 	//--------------------------------------------------------------------------
 	// Set up the current ramp for conditioning.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_RampSetTarget(g_ddi_bc_Configuration.u16ConditioningCurrent);
 
 	//--------------------------------------------------------------------------
 	// Move to the Conditioning state.
 	//--------------------------------------------------------------------------
-
 	g_ddi_bc_State = DDI_BC_STATE_CONDITIONING;
 
 #ifdef CONFIG_POWER_SUPPLY_DEBUG
@@ -232,27 +243,24 @@ static void TransitionToCharging(void)
 	//--------------------------------------------------------------------------
 	// Reset the state timer.
 	//--------------------------------------------------------------------------
-
 	g_ddi_bc_u32StateTimer = 0;
 
 	//--------------------------------------------------------------------------
 	// Set up the current ramp for charging.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_RampSetTarget(g_ddi_bc_Configuration.u16ChargingCurrent);
 
 	//--------------------------------------------------------------------------
 	// We'll be finished charging when the current flow drops below this level.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_hwSetCurrentThreshold(g_ddi_bc_Configuration.
 				     u16ChargingThresholdCurrent);
 
 	//--------------------------------------------------------------------------
 	// Move to the Charging state.
 	//--------------------------------------------------------------------------
-
 	g_ddi_bc_State = DDI_BC_STATE_CHARGING;
+
 #ifdef CONFIG_POWER_SUPPLY_DEBUG
 	printk("Battery charger: now charging\n");
 #endif
@@ -431,7 +439,7 @@ static ddi_bc_Status_t ddi_bc_Disabled(void)
 
 ////////////////////////////////////////////////////////////////////////////////
 //!
-//! \brief Waitin to Charge state function.
+//! \brief Waiting to Charge state function, with DCDC on.
 //!
 //! \fntype Function
 //!
@@ -440,7 +448,7 @@ static ddi_bc_Status_t ddi_bc_Disabled(void)
 ////////////////////////////////////////////////////////////////////////////////
 static ddi_bc_Status_t ddi_bc_DcdcModeWaitingToCharge(void)
 {
-
+#if 0
 	uint16_t u16BatteryVoltage;
 
 	//--------------------------------------------------------------------------
@@ -460,7 +468,7 @@ static ddi_bc_Status_t ddi_bc_DcdcModeWaitingToCharge(void)
 	//--------------------------------------------------------------------------
 
 	if (!ddi_bc_hwPowerSupplyIsPresent()) {
-		TransitionToCharging();
+//		TransitionToCharging();
 		return (DDI_BC_STATUS_SUCCESS);
 	}
 	//--------------------------------------------------------------------------
@@ -471,25 +479,26 @@ static ddi_bc_Status_t ddi_bc_DcdcModeWaitingToCharge(void)
 	u16BatteryVoltage = ddi_bc_hwGetBatteryVoltage();
 
 	//--------------------------------------------------------------------------
-	// If topping off has not yet occurred, we do not care if DCDCs are on or not.
-	// If we have already topped off at least once, then we want to delay so that
-	// we give the battery a chance to discharge some instead of constantly topping
-	// it off.
+	// If topping off has not yet occurred, we do not care if DCDCs are on
+    // or not.  If we have already topped off at least once, then we want to
+    // delay so that we give the battery a chance to discharge some instead
+    // of constantly topping it off.
 	//--------------------------------------------------------------------------
 
 	if (ddi_bc_hwIsDcdcOn()) {
 
-		//--------------------------------------------------------------------------
+		//----------------------------------------------------------------------
 		// If DCDCs have turned on, restert the DCDCInactivityTimer;
-		//--------------------------------------------------------------------------
+		//----------------------------------------------------------------------
 		DcdcInactityTimer = 0;
 
-		//--------------------------------------------------------------------------
-		// If the battery voltage measurement is at or below the LowDcdcBatteryVoltage
-		// level, we should definetly start charging the battery.  The
-		// LowDcdcBatteryVoltage value should be low enough to account for IR voltage
-		// drop from the battery under heavy DCDC load.
-		//--------------------------------------------------------------------------
+		//----------------------------------------------------------------------
+		// If the battery voltage measurement is at or below the
+        // LowDcdcBatteryVoltage level, we should definetly start charging
+        // the battery.  The LowDcdcBatteryVoltage value should be low enough
+        // to account for IR voltage drop from the battery under heavy
+        // DCDC load.
+		//----------------------------------------------------------------------
 
 		if (u16BatteryVoltage <
 		    g_ddi_bc_Configuration.u16LowDcdcBatteryVoltage_mv) {
@@ -512,29 +521,30 @@ static ddi_bc_Status_t ddi_bc_DcdcModeWaitingToCharge(void)
 		if (u16BatteryVoltage <
 		    g_ddi_bc_Configuration.u16ConditioningThresholdVoltage) {
 
-			//----------------------------------------------------------------------
-			// If control arrives here, the battery is very low and it needs to be
-			// conditioned.
-			//----------------------------------------------------------------------
+			//------------------------------------------------------------------
+			// If control arrives here, the battery is very low and it needs
+            // to be conditioned.
+			//------------------------------------------------------------------
 
 			TransitionToConditioning();
 		} else {
 
-			//----------------------------------------------------------------------
+			//------------------------------------------------------------------
 			// If control arrives here, the battery isn't too terribly low.
-			//----------------------------------------------------------------------
+			//------------------------------------------------------------------
 
 			TransitionToCharging();
 		}
 
 	}
-
+#endif
+    CHLOG(">>> WARNING: Using DCDC mode for charging.  Don't do that.\n");
 	return (DDI_BC_STATUS_SUCCESS);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 //!
-//! \brief Waitin to Charge state function.
+//! \brief Waiting to Charge state function, with DCDC off.
 //!
 //! \fntype Function
 //!
@@ -561,38 +571,48 @@ static ddi_bc_Status_t ddi_bc_WaitingToCharge(void)
 	//--------------------------------------------------------------------------
 
 	if (!ddi_bc_hwPowerSupplyIsPresent()) {
-#ifdef CONFIG_POWER_SUPPLY_DEBUG
-		u16ExternalBatteryPowerVoltageCheck = 0;
-#endif
+//#ifdef CONFIG_POWER_SUPPLY_DEBUG
+//		u16ExternalBatteryPowerVoltageCheck = 0;
+//#endif
+        CHLOG("Power supply isn't present, so we're not going to charge.\n");
 		return (DDI_BC_STATUS_SUCCESS);
 	}
+
+    if(!is_battery_present()) {
+        CHLOG("Battery isn't present, so transitioning to broken.\n");
+		ddi_bc_gBrokenReason = DDI_BC_BROKEN_NO_BATTERY_DETECTED;
+		TransitionToBroken();
+        return (DDI_BC_STATUS_BROKEN);
+    }
+
+
 	//--------------------------------------------------------------------------
 	// If control arrives here, we're connected to a power supply. Have a look
 	// at the battery voltage.
 	//--------------------------------------------------------------------------
-
 	u16BatteryVoltage = ddi_bc_hwGetBatteryVoltage();
 
-#ifdef CONFIG_POWER_SUPPLY_DEBUG
+//#ifdef CONFIG_POWER_SUPPLY_DEBUG
+#if 0
 	if (u16ExternalBatteryPowerVoltageCheck) {
 		if ((u16ExternalBatteryPowerVoltageCheck - u16BatteryVoltage) >
 		    300) {
-			//----------------------------------------------------------------------
-			// If control arrives here, battery voltage has dropped too quickly after
-			// the first charge cycle.  We think an external voltage regulator is
-			// connected.  If the DCDCs are on and this voltage drops too quickly,
-			// it will cause large droops and possible brownouts so we disable
-			// charging.
-			//----------------------------------------------------------------------
+			//------------------------------------------------------------------
+			// If control arrives here, battery voltage has dropped too
+            // quickly after the first charge cycle.  We think an external
+            // voltage regulator is connected.  If the DCDCs are on and
+            // this voltage drops too quickly, it will cause large droops
+            // and possible brownouts so we disable charging.
+			//------------------------------------------------------------------
 
 			ddi_bc_gBrokenReason =
 			    DDI_BC_BROKEN_EXTERNAL_BATTERY_VOLTAGE_DETECTED;
 
 			TransitionToBroken();
 
-			//----------------------------------------------------------------------
+			//------------------------------------------------------------------
 			// Tell our caller the battery appears to be broken.
-			//----------------------------------------------------------------------
+			//------------------------------------------------------------------
 
 			return (DDI_BC_STATUS_BROKEN);
 		} else {
@@ -603,6 +623,7 @@ static ddi_bc_Status_t ddi_bc_WaitingToCharge(void)
 	}
 #endif
 
+#if 0
 	//--------------------------------------------------------------------------
 	// In addition to 5V, is DCDC on also?  If so, swith to DCDC Mode Waiting
 	// to Charge state.
@@ -612,27 +633,32 @@ static ddi_bc_Status_t ddi_bc_WaitingToCharge(void)
 		TransitionToDcdcModeWaitingToCharge();
 		return (DDI_BC_STATUS_SUCCESS);
 	}
+#endif
+
 
 	//--------------------------------------------------------------------------
 	// If the battery voltage isn't low, we don't need to be charging it. We
-	// use a 5% margin to decide.
+	// use an 8% margin to decide.
 	//--------------------------------------------------------------------------
-
 	if (!bRestartChargeCycle) {
 		uint16_t x;
 
-		x = u16BatteryVoltage + (u16BatteryVoltage / 20);
+		x = u16BatteryVoltage + (u16BatteryVoltage / 12);
 
-		if (x >= g_ddi_bc_Configuration.u16ChargingVoltage)
+		if (x >= g_ddi_bc_Configuration.u16ChargingVoltage) {
+//            CHLOG("Not charging, because %d >= %d\n", x, 
+//                        g_ddi_bc_Configuration.u16ChargingVoltage);
 			return (DDI_BC_STATUS_SUCCESS);
+        }
 
 	}
 
 	bRestartChargeCycle = false;
+
+
 	//--------------------------------------------------------------------------
 	// If control arrives here, the battery is low. How low?
 	//--------------------------------------------------------------------------
-
 	if (u16BatteryVoltage <
 	    g_ddi_bc_Configuration.u16ConditioningThresholdVoltage) {
 
@@ -640,7 +666,9 @@ static ddi_bc_Status_t ddi_bc_WaitingToCharge(void)
 		// If control arrives here, the battery is very low and it needs to be
 		// conditioned.
 		//----------------------------------------------------------------------
-
+        CHLOG("Voltage is really low.  %d < %d.  "
+              "Transitioning to conditioning...\n", u16BatteryVoltage,
+                g_ddi_bc_Configuration.u16ConditioningThresholdVoltage);
 		TransitionToConditioning();
 
 	} else {
@@ -648,7 +676,9 @@ static ddi_bc_Status_t ddi_bc_WaitingToCharge(void)
 		//----------------------------------------------------------------------
 		// If control arrives here, the battery isn't too terribly low.
 		//----------------------------------------------------------------------
-
+        CHLOG("Voltage is okay.  %d >= %d.  "
+              "Transitioning to charging...\n", u16BatteryVoltage,
+                g_ddi_bc_Configuration.u16ConditioningThresholdVoltage);
 		TransitionToCharging();
 
 	}
@@ -676,56 +706,59 @@ static ddi_bc_Status_t ddi_bc_Conditioning(void)
 	//--------------------------------------------------------------------------
 	// The first order of business is to update alarms.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_RampUpdateAlarms();
 
 	//--------------------------------------------------------------------------
 	// If we're not under an alarm, increment the state timer.
 	//--------------------------------------------------------------------------
-
 	if (!ddi_bc_RampGetDieTempAlarm() && !ddi_bc_RampGetBatteryTempAlarm()) {
 		g_ddi_bc_u32StateTimer +=
 		    g_ddi_bc_Configuration.u32StateMachinePeriod;
 	}
+
 	//--------------------------------------------------------------------------
 	// Check if the power supply is still around.
 	//--------------------------------------------------------------------------
-
 	if (!ddi_bc_hwPowerSupplyIsPresent()) {
 
 		//----------------------------------------------------------------------
 		// If control arrives here, the power supply has been removed. Go back
 		// and wait.
 		//----------------------------------------------------------------------
-
+        CHLOG("Was Conditioning, now transitioning to waitingo_to_charge "
+              "due to lack of a power supply\n");
 		TransitionToWaitingToCharge();
 
 		//----------------------------------------------------------------------
 		// Return success.
 		//----------------------------------------------------------------------
-
 		return (DDI_BC_STATUS_SUCCESS);
-
 	}
+
 
 	//--------------------------------------------------------------------------
 	// If control arrives here, we're still connected to a power supply.
-	// Check if a battery is connected.  If the voltage rises to high with only
-	// conditioning charge current, we determine that a battery is not connected.
+	// Check if a battery is connected.  If the voltage rises too high with
+    // only conditioning charge current, we determine that a battery is not
+    // connected.
 	// If that is not the case and a battery is connected, check
 	// if the battery voltage indicates it still needs conditioning.
 	//--------------------------------------------------------------------------
-
-//	if (ddi_bc_hwGetBatteryVoltage() >= 3900) {
+    if(!is_battery_present()) {
+    //if((ddi_power_GetBattery()<2000)) {
+/*
 	if ((ddi_bc_hwGetBatteryVoltage() >
-	     g_ddi_bc_Configuration.u16ConditioningMaxVoltage) &&
-	    (ddi_power_GetMaxBatteryChargeCurrent() <
-	     g_ddi_bc_Configuration.u16ConditioningCurrent)) {
+                g_ddi_bc_Configuration.u16ConditioningMaxVoltage)
+     && (ddi_power_GetMaxBatteryChargeCurrent() <
+                g_ddi_bc_Configuration.u16ConditioningCurrent)) {
+*/
+
+        CHLOG("Looks like you don't have a battery connected.\n");
+
 		//----------------------------------------------------------------------
 		// If control arrives here, voltage has risen too quickly for so
 		// little charge being applied so their must be no battery connected.
 		//----------------------------------------------------------------------
-
 		ddi_bc_gBrokenReason = DDI_BC_BROKEN_NO_BATTERY_DETECTED;
 
 		TransitionToBroken();
@@ -733,13 +766,11 @@ static ddi_bc_Status_t ddi_bc_Conditioning(void)
 		//----------------------------------------------------------------------
 		// Tell our caller the battery appears to be broken.
 		//----------------------------------------------------------------------
-
 		return (DDI_BC_STATUS_BROKEN);
-
 	}
 
 	if (ddi_bc_hwGetBatteryVoltage() >=
-	    g_ddi_bc_Configuration.u16ConditioningMaxVoltage) {
+                    g_ddi_bc_Configuration.u16ConditioningMaxVoltage) {
 
 		//----------------------------------------------------------------------
 		// If control arrives here, this battery no longer needs conditioning.
@@ -752,43 +783,41 @@ static ddi_bc_Status_t ddi_bc_Conditioning(void)
 		//----------------------------------------------------------------------
 
 		return (DDI_BC_STATUS_SUCCESS);
-
 	}
-	//--------------------------------------------------------------------------
-	// Have we been in this state too long?
-	//--------------------------------------------------------------------------
 
+
+	//--------------------------------------------------------------------------
+	// Have we been in this state too long?  If so, the battery's broken.
+	//--------------------------------------------------------------------------
 	if (g_ddi_bc_u32StateTimer >=
 	    g_ddi_bc_Configuration.u32ConditioningTimeout) {
 
 		//----------------------------------------------------------------------
-		// If control arrives here, we've been here too long.
+		// If control arrives here, we've been conditioning too long.
 		//----------------------------------------------------------------------
-
 		ddi_bc_gBrokenReason = DDI_BC_BROKEN_CHARGING_TIMEOUT;
+
 
 		TransitionToBroken();
 
 		//----------------------------------------------------------------------
 		// Tell our caller the battery appears to be broken.
 		//----------------------------------------------------------------------
-
 		return (DDI_BC_STATUS_BROKEN);
-
 	}
+
+
 	//--------------------------------------------------------------------------
 	// If control arrives here, we're staying in this state. Step the current
 	// ramp.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_RampStep(g_ddi_bc_Configuration.u32StateMachinePeriod);
+
 
 	//--------------------------------------------------------------------------
 	// Return success.
 	//--------------------------------------------------------------------------
-
 	return (DDI_BC_STATUS_SUCCESS);
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -807,44 +836,44 @@ static ddi_bc_Status_t ddi_bc_Charging(void)
 	// This variable counts the number of times we've seen the charging status
 	// bit cleared.
 	//--------------------------------------------------------------------------
-
 	static int iStatusCount = 0;
+
+
 	bool bIsDcdcOn;
 
 	//--------------------------------------------------------------------------
 	// The first order of business is to update alarms.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_RampUpdateAlarms();
+
 
 	//--------------------------------------------------------------------------
 	// If we're not under an alarm, increment the state timer.
 	//--------------------------------------------------------------------------
+    if (!ddi_bc_RampGetDieTempAlarm() && !ddi_bc_RampGetBatteryTempAlarm()) {
+        g_ddi_bc_u32StateTimer += g_ddi_bc_Configuration.u32StateMachinePeriod;
+    }
 
-	if (!ddi_bc_RampGetDieTempAlarm() && !ddi_bc_RampGetBatteryTempAlarm()) {
-		g_ddi_bc_u32StateTimer +=
-		    g_ddi_bc_Configuration.u32StateMachinePeriod;
-	}
 	//--------------------------------------------------------------------------
 	// Check if the power supply is still around.
 	//--------------------------------------------------------------------------
-
 	if (!ddi_bc_hwPowerSupplyIsPresent()) {
 
 		//----------------------------------------------------------------------
 		// If control arrives here, the power supply has been removed. Go back
 		// and wait.
 		//----------------------------------------------------------------------
-
+        CHLOG("Charging, transitioning to waiting_to_charge due to "
+              "lack of a power supply\n");
 		TransitionToWaitingToCharge();
 
 		//----------------------------------------------------------------------
 		// Return success.
 		//----------------------------------------------------------------------
-
 		return (DDI_BC_STATUS_SUCCESS);
 
 	}
+
 	//--------------------------------------------------------------------------
 	// If control arrives here, we're still connected to a power supply. We need
 	// to decide now if the battery is still charging, or if it's nearly full.
@@ -869,15 +898,15 @@ static ddi_bc_Status_t ddi_bc_Charging(void)
 	//     indicated by the charge status bit).
 	//
 	//--------------------------------------------------------------------------
-
-	bIsDcdcOn = ddi_bc_hwIsDcdcOn();
-	if (bIsDcdcOn) {
-		ddi_bc_hwSetCurrentThreshold(g_ddi_bc_Configuration.
-					     u16DdcdModeChargingThresholdCurrent);
-	} else {
+//	bIsDcdcOn = ddi_bc_hwIsDcdcOn();
+//	if (bIsDcdcOn) {
+//		ddi_bc_hwSetCurrentThreshold(g_ddi_bc_Configuration.
+//					     u16DdcdModeChargingThresholdCurrent);
+//	}
+//    else {
 		ddi_bc_hwSetCurrentThreshold(g_ddi_bc_Configuration.
 					     u16ChargingThresholdCurrent);
-	}
+//	}
 
 	{
 		uint16_t u16ActualProgrammedCurrent = ddi_bc_hwGetMaxCurrent();
@@ -885,75 +914,69 @@ static ddi_bc_Status_t ddi_bc_Charging(void)
 		//----------------------------------------------------------------------
 		// Get the Maximum current that we will ramp to.
 		//----------------------------------------------------------------------
-
-		//----------------------------------------------------------------------
-		// Not all possible values are expressible by the BATTCHRG_I bitfield.
-		// The following coverts the max current value into the the closest hardware
-		// expressible bitmask equivalent.  Then, it converts this back to the actual
-		// decimal current value that this bitmask represents.
-		//----------------------------------------------------------------------
-
 		uint16_t u16CurrentRampTarget = ddi_bc_RampGetTarget();
-
 		if (u16CurrentRampTarget > ddi_bc_RampGetLimit())
 			u16CurrentRampTarget = ddi_bc_RampGetLimit();
 
 		//----------------------------------------------------------------------
 		// Not all possible values are expressible by the BATTCHRG_I bitfield.
-		// The following coverts the max current value into the the closest hardware
-		// expressible bitmask equivalent.  Then, it converts this back to the actual
-		// decimal current value that this bitmask represents.
+		// The following coverts the max current value into the the closest
+        // hardware expressible bitmask equivalent.  Then, it converts this
+        // back to the actual decimal current value that this bitmask
+        // represents.
 		//----------------------------------------------------------------------
-
 		u16CurrentRampTarget =
 		    ddi_bc_hwExpressibleCurrent(u16CurrentRampTarget);
 
 		//----------------------------------------------------------------------
-		// We want to wait before we check the charge status bit until the ramping
-		// up is complete.  Because the charge status bit is noisy, we want to
-		// disregard it until the programmed charge currint in BATTCHRG_I is well
-		// beyond the STOP_ILIMIT value.
+		// We want to wait before we check the charge status bit until the
+        // ramping up is complete.  Because the charge status bit is noisy,
+        // we want to disregard it until the programmed charge currint in
+        // BATTCHRG_I is well beyond the STOP_ILIMIT value.
+        // SMC - If this if() evaluates to true, then we've stopped
+        // charging for one reason or another.
 		//----------------------------------------------------------------------
 		if ((u16ActualProgrammedCurrent >= u16CurrentRampTarget) &&
 		    !ddi_bc_hwGetChargeStatus()) {
 			uint8_t u8IlimitThresholdLimit;
-			//----------------------------------------------------------------------
-			// If control arrives here, the hardware flag is telling us that the
-			// charging current has fallen below the threshold. We need to see this
-			// happen twice consecutively before we believe it. Increment the count.
-			//----------------------------------------------------------------------
+
+			//------------------------------------------------------------------
+			// If control arrives here, the hardware flag is telling us that
+            // the charging current has fallen below the threshold. We need
+            // to see this happen twice consecutively before we believe it.
+            // Increment the count.
+			//------------------------------------------------------------------
 
 			iStatusCount++;
 
-			//----------------------------------------------------------------------
-			// If we are in DCDC operting mode, we only need this criteria to be true
-			// once before we advance to topping off.  In 5V only mode, we want 10
-			// consecutive times before advancing to topping off.
-			//----------------------------------------------------------------------
-
-			if (bIsDcdcOn)
-				u8IlimitThresholdLimit = 1;
-			else
+			//------------------------------------------------------------------
+			// If we are in DCDC operting mode, we only need this criteria
+            // to be true once before we advance to topping off.  In 5V only
+            // mode, we want 10 consecutive times before advancing to topping
+            // off.
+			//------------------------------------------------------------------
+//			if (bIsDcdcOn)
+//				u8IlimitThresholdLimit = 1;
+//			else
 				u8IlimitThresholdLimit = 10;
 
-			//----------------------------------------------------------------------
+			//------------------------------------------------------------------
 			// How many times in a row have we seen this status bit low?
-			//----------------------------------------------------------------------
-
+			//------------------------------------------------------------------
 			if (iStatusCount >= u8IlimitThresholdLimit) {
 
-				//------------------------------------------------------------------
-				// If control arrives here, we've seen the CHRGSTS bit low too many
-				// times. This means it's time to move back to the waiting to charge
-				// state if DCDCs are present or move to the Topping Off state if
-				// no DCDCs are present.  Because we can't measure only the current
-				// going to the battery when the DCDCs are active, we don't know when
-				// to start topping off or how long to top off.
+				//--------------------------------------------------------------
+				// If control arrives here, we've seen the CHRGSTS bit low
+                // too many times. This means it's time to move back to the
+                // waiting to charge state if DCDCs are present or move to the
+                // Topping Off state if no DCDCs are present.  Because we
+                // can't measure only the current going to the battery when
+                // the DCDCs are active, we don't know when to start
+                // topping off or how long to top off.
 				//
 				// First, reset the status count for the next time we're in this
 				// state.
-				//------------------------------------------------------------------
-
+				//--------------------------------------------------------------
 				iStatusCount = 0;
 
 #ifdef CONFIG_POWER_SUPPLY_DEBUG
@@ -961,45 +984,59 @@ static ddi_bc_Status_t ddi_bc_Charging(void)
 				    ddi_bc_hwGetBatteryVoltage();
 #endif
 
+#if 0
 				if (bIsDcdcOn) {
 					// We will restart the charge cycle once the DCDCs are no
 					// longer present.
 					DcdcInactityTimer = 0;
 
+                    CHLOG("Transitioning, because the current is doing something funky.\n");
 					TransitionToWaitingToCharge();
-				} else if (g_ddi_bc_u32StateTimer <=
-					   TRANSITION_TO_TOPOFF_MINIMUM_CHARGE_TIME_mS)
-				{
-					//------------------------------------------------------------------
-					// If we haven't actually didn't have to charge very long
+				}
+#endif
+
+
+                if (g_ddi_bc_u32StateTimer <=
+					   TRANSITION_TO_TOPOFF_MINIMUM_CHARGE_TIME_mS) {
+					//----------------------------------------------------------
+					// If we actually didn't have to charge very long
 					// then the battery was already full.  In this case, we do
 					// not top off so that we do not needlessly overcharge the
-					//  battery.
-					//------------------------------------------------------------------
+					// battery.
+					//----------------------------------------------------------
+                    CHLOG("Transitioning to waiting_to_charge, because "
+                          "the battery was full after %d iterations, "
+                          "and we were only charging for %d ms "
+                          "(less than %d ms).\n",
+                          (int)u8IlimitThresholdLimit,
+                          g_ddi_bc_u32StateTimer,
+                          TRANSITION_TO_TOPOFF_MINIMUM_CHARGE_TIME_mS);
 					TransitionToWaitingToCharge();
-				} else {
+				}
+                else {
 
-					//------------------------------------------------------------------
+					//----------------------------------------------------------
 					// Move to the Topping Off state.
-					//------------------------------------------------------------------
-
+					//----------------------------------------------------------
+                    CHLOG("Battery stopped charging.  "
+                          "Transitioning to topping off.\n");
 					TransitionToToppingOff();
 				}
-				//------------------------------------------------------------------
-				// Return success.
-				//------------------------------------------------------------------
 
+				//--------------------------------------------------------------
+				// Return success.
+				//--------------------------------------------------------------
 				return (DDI_BC_STATUS_SUCCESS);
 
 			}
 
-		} else {
+		}
+        else {
 
-			//----------------------------------------------------------------------
+			//------------------------------------------------------------------
 			// If control arrives here, the battery is still charging. Clear the
 			// status count.
-			//----------------------------------------------------------------------
-
+			//------------------------------------------------------------------
 			iStatusCount = 0;
 
 		}
@@ -1015,29 +1052,43 @@ static ddi_bc_Status_t ddi_bc_Charging(void)
 		//----------------------------------------------------------------------
 		// If control arrives here, we've been here too long.
 		//----------------------------------------------------------------------
-
 		ddi_bc_gBrokenReason = DDI_BC_BROKEN_CHARGING_TIMEOUT;
 
+        CHLOG("We were charging for %d minutes, and didn't finish.  "
+              "Declaring a broken battery.\n",
+              g_ddi_bc_Configuration.u32ChargingTimeout);
 		TransitionToBroken();
 
 		//----------------------------------------------------------------------
 		// Tell our caller the battery appears to be broken.
 		//----------------------------------------------------------------------
-
 		return (DDI_BC_STATUS_BROKEN);
 
 	}
+
+
+    if(!is_battery_present()) {
+		ddi_bc_gBrokenReason = DDI_BC_BROKEN_NO_BATTERY_DETECTED;
+        CHLOG("Looks like you don't have a battery connected.\n");
+		ddi_bc_gBrokenReason = DDI_BC_BROKEN_NO_BATTERY_DETECTED;
+		TransitionToBroken();
+		//----------------------------------------------------------------------
+		// Tell our caller the battery appears to be broken.
+		//----------------------------------------------------------------------
+		return (DDI_BC_STATUS_BROKEN);
+	}
+
+
 	//--------------------------------------------------------------------------
 	// If control arrives here, we're staying in this state. Step the current
 	// ramp.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_RampStep(g_ddi_bc_Configuration.u32StateMachinePeriod);
+
 
 	//--------------------------------------------------------------------------
 	// Return success.
 	//--------------------------------------------------------------------------
-
 	return (DDI_BC_STATUS_SUCCESS);
 
 }
@@ -1056,35 +1107,31 @@ static ddi_bc_Status_t ddi_bc_ToppingOff(void)
 
 	//--------------------------------------------------------------------------
 	// The first order of business is to update alarms.
-
 	//--------------------------------------------------------------------------
-
 	ddi_bc_RampUpdateAlarms();
 
 	//--------------------------------------------------------------------------
 	// Increment the state timer. Notice that, unlike other states, we increment
 	// the state timer whether or not we're under an alarm.
 	//--------------------------------------------------------------------------
-
 	g_ddi_bc_u32StateTimer += g_ddi_bc_Configuration.u32StateMachinePeriod;
 
 	//--------------------------------------------------------------------------
 	// Check if the power supply is still around.
 	//--------------------------------------------------------------------------
-
 	if (!ddi_bc_hwPowerSupplyIsPresent()) {
 
 		//----------------------------------------------------------------------
 		// If control arrives here, the power supply has been removed. Go back
 		// and wait.
 		//---------------------------------------------------------------------
-
+        CHLOG("Transitioning to waiting_to_charge after topping off, "
+              "because the power supply went away\n");
 		TransitionToWaitingToCharge();
 
 		//----------------------------------------------------------------------
 		// Return success.
 		//----------------------------------------------------------------------
-
 		return (DDI_BC_STATUS_SUCCESS);
 
 	}
@@ -1097,26 +1144,27 @@ static ddi_bc_Status_t ddi_bc_ToppingOff(void)
 		//----------------------------------------------------------------------
 		// If control arrives here, we're done topping off.
 		//----------------------------------------------------------------------
-
+        CHLOG("Transitioning to waiting_to_charge after topping off, "
+               "because we're done topping off\n");
 		TransitionToWaitingToCharge();
 
 	}
+
 	//--------------------------------------------------------------------------
 	// If control arrives here, we're staying in this state. Step the current
 	// ramp.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_RampStep(g_ddi_bc_Configuration.u32StateMachinePeriod);
 
 	//--------------------------------------------------------------------------
 	// Return success.
 	//--------------------------------------------------------------------------
-
 	return (DDI_BC_STATUS_SUCCESS);
 
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+//
 // End of file
 ////////////////////////////////////////////////////////////////////////////////
 //! @}

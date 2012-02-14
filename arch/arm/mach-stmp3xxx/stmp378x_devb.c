@@ -32,6 +32,7 @@
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 
+#include <mach/cpu.h>
 #include <mach/stmp3xxx.h>
 #include <mach/gpmi.h>
 #include <mach/power.h>
@@ -41,6 +42,10 @@
 #include <mach/regs-usbphy.h>
 #include <mach/regs-pinctrl.h>
 #include <mach/regs-pwm.h>
+
+#define CHLOG(format, arg...)            \
+    printk("stmp378x_devb.c - %s():%d - " format, __func__, __LINE__, ## arg)
+
 
 #include "common.h"
 
@@ -85,29 +90,30 @@ static struct platform_device stmp378x_leds = {
 };
 
 static struct platform_device *devices[] = {
-	&stmp3xxx_keyboard,
+	&stmp3xxx_framebuffer,
+	&stmp3xxx_backlight,
+	&bend_sensor,
 	&stmp3xxx_touchscreen,
-	&stmp3xxx_appuart,
+//	&stmp3xxx_appuart,
 	&stmp3xxx_dbguart,
 	&stmp3xxx_watchdog,
 	&stmp3xxx_usb,
 	&stmp3xxx_udc,
 	&stmp3xxx_ehci,
 	&stmp3xxx_rtc,
-	&stmp3xxx_framebuffer,
-	&stmp3xxx_backlight,
 	&stmp3xxx_rotdec,
 	&stmp378x_i2c,
 	&stmp3xxx_persistent,
-	&stmp3xxx_dcp_bootstream,
+//	&stmp3xxx_dcp_bootstream,
 	&stmp3xxx_dcp,
-	&stmp3xxx_mtest,
+//	&stmp3xxx_mtest,
 	&stmp3xxx_battery,
-	&stmp3xxx_pxp,
+//	&stmp3xxx_pxp,
 };
 
 static struct stmpkbd_keypair keyboard_data[] = {
 	{ 100, KEY_F4 },
+    /*
 	{ 306, KEY_F5 },
 	{ 626, KEY_F6 },
 	{ 932, KEY_F7 },
@@ -118,6 +124,7 @@ static struct stmpkbd_keypair keyboard_data[] = {
 	{ 2525, KEY_F12 },
 	{ 2831, KEY_F13},
 	{ 3134, KEY_F14 },
+    */
 	{ -1, 0 },
 };
 const char *gpmi_part_probes[] = { "cmdlinepart", NULL };
@@ -228,7 +235,7 @@ static int usb_phy_enable(struct platform_device *pdev)
 
 #if defined(CONFIG_USB_EHCI_HCD) || defined(CONFIG_USB_EHCI_HCD_MODULE)
 	/* enable disconnect detector */
-	HW_USBPHY_CTRL_SET(BM_USBPHY_CTRL_ENHOSTDISCONDETECT);
+	//HW_USBPHY_CTRL_SET(BM_USBPHY_CTRL_ENHOSTDISCONDETECT);
 #endif
 	return 0;
 }
@@ -370,7 +377,7 @@ static void __init stmp378x_devb_init(void)
 
 	stmp3xxx_set_mmc_data(&stmp3xxx_mmc.dev);
 	stmp3xxx_gpmi.dev.platform_data = &gpmi_partitions;
-	stmp3xxx_keyboard.dev.platform_data = &keyboard_data;
+	bend_sensor.dev.platform_data = &keyboard_data;
 	udata = stmp3xxx_udc.dev.platform_data;
 	udata->platform_init = usb_phy_enable;
 	udata = stmp3xxx_ehci.dev.platform_data;
@@ -378,10 +385,27 @@ static void __init stmp378x_devb_init(void)
 	spi_register_board_info(spi_board_info, ARRAY_SIZE(spi_board_info));
 	stmp3xxx_ssp1_device_register();	/* MMC or SSP */
 	stmp3xxx_ssp2_device_register();	/* MMC or SSP */
+    CHLOG("Adding %d platform-specific devices\n", ARRAY_SIZE(devices));
 	platform_add_devices(devices, ARRAY_SIZE(devices));
 	if (pwm_leds_enable)
 		platform_device_register(&stmp378x_leds);
 }
+
+static int global_chumbyrev = 0;
+int chumby_revision(void)
+{
+	return global_chumbyrev;
+}
+EXPORT_SYMBOL(chumby_revision);
+
+static int __init chumbyrev_setup(char *str)
+{
+	global_chumbyrev = simple_strtoul(str, NULL, 16);
+	printk("Detected chumby version %d (from str %s)\n", global_chumbyrev, str);
+}
+
+__setup("chumbyrev=", chumbyrev_setup);
+
 
 MACHINE_START(STMP378X, "STMP378X")
 	.phys_io	= 0x80000000,

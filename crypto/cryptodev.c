@@ -361,7 +361,11 @@ crypto_run(struct fcrypt *fcr, struct crypt_op *cop)
 
 	desc.tfm = ses_ptr->tfm;
 	desc.info = NULL;
-	desc.flags = 0;
+    // CHUMBY_crypto_hack
+    // We copy over flags to allow the userspace interface to set flags on
+    // the crypto process.
+	desc.flags = cop->flags;
+    // !CHUMBY_crypto_hack
 
 	while (nbytes > 0) {
 		size_t current_len = nbytes > bufsize ? bufsize : nbytes;

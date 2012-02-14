@@ -23,6 +23,7 @@ ENTRY(v6_early_abort)
 #ifdef CONFIG_CPU_32v6K
 	clrex
 #else
+	ldr	r1, [sp]			@ Load r1 in case strex succeeds
 	strex	r0, r1, [sp]			@ Clear the exclusive monitor
 #endif
 	mrc	p15, 0, r1, c5, c0, 0		@ get FSR

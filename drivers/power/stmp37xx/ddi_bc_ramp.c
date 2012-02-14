@@ -102,9 +102,9 @@ void ddi_bc_RampReset()
 	//--------------------------------------------------------------------------
 	// Reset the control structure.
 	//--------------------------------------------------------------------------
-
 	g_RampControl.u32AccumulatedTime = 0;
 	g_RampControl.u16Target = 0;
+
 
 	//--------------------------------------------------------------------------
 	// Step the ramp. Note that we don't care if this function returns an error.
@@ -112,10 +112,9 @@ void ddi_bc_RampReset()
 	// possible. But, for example, if the Battery Charger is not yet
 	// initialized, it doesn't matter.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_RampStep(0);
-
 }
+
 
 ////////////////////////////////////////////////////////////////////////////////
 //!
@@ -139,8 +138,8 @@ uint16_t ddi_bc_RampSetTarget(uint16_t u16Target)
 	//--------------------------------------------------------------------------
 	// Set the target.
 	//--------------------------------------------------------------------------
-
 	g_RampControl.u16Target = u16Target;
+
 
 	//--------------------------------------------------------------------------
 	// Step the ramp. Note that we don't care if this function returns an error.
@@ -148,16 +147,15 @@ uint16_t ddi_bc_RampSetTarget(uint16_t u16Target)
 	// possible. But, for example, if the Battery Charger is not yet
 	// initialized, it doesn't matter.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_RampStep(0);
+
 
 	//--------------------------------------------------------------------------
 	// Compute and return the expressible target.
 	//--------------------------------------------------------------------------
-
 	return (ddi_bc_hwExpressibleCurrent(u16Target));
-
 }
+
 
 ////////////////////////////////////////////////////////////////////////////////
 //!
@@ -176,7 +174,6 @@ uint16_t ddi_bc_RampGetTarget(void)
 	//--------------------------------------------------------------------------
 	// Return the target.
 	//--------------------------------------------------------------------------
-
 	return (g_RampControl.u16Target);
 
 }
@@ -200,8 +197,8 @@ uint16_t ddi_bc_RampSetLimit(uint16_t u16Limit)
 	//--------------------------------------------------------------------------
 	// Set the limit.
 	//--------------------------------------------------------------------------
-
 	g_RampControl.u16Limit = u16Limit;
+
 
 	//--------------------------------------------------------------------------
 	// Step the ramp. Note that we don't care if this function returns an error.
@@ -209,15 +206,13 @@ uint16_t ddi_bc_RampSetLimit(uint16_t u16Limit)
 	// possible. But, for example, if the Battery Charger is not yet
 	// initialized, it doesn't matter.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_RampStep(0);
+
 
 	//--------------------------------------------------------------------------
 	// Compute and return the expressible limit.
 	//--------------------------------------------------------------------------
-
 	return (ddi_bc_hwExpressibleCurrent(u16Limit));
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -237,7 +232,6 @@ uint16_t ddi_bc_RampGetLimit(void)
 	//--------------------------------------------------------------------------
 	// Return the current limit.
 	//--------------------------------------------------------------------------
-
 	return (g_RampControl.u16Limit);
 
 }
@@ -256,19 +250,16 @@ void ddi_bc_RampUpdateAlarms()
 {
 
 	// Set to true if something changed and we need to step the ramp right away.
-
 	int iStepTheRamp = 0;
 
 	//--------------------------------------------------------------------------
 	// Are we monitoring die temperature?
 	//--------------------------------------------------------------------------
-
 	if (g_ddi_bc_Configuration.monitorDieTemp) {
 
 		//----------------------------------------------------------------------
 		// Get the die temperature range.
 		//----------------------------------------------------------------------
-
 		int16_t i16Low;
 		int16_t i16High;
 
@@ -278,7 +269,6 @@ void ddi_bc_RampUpdateAlarms()
 		// Now we need to decide if it's time to raise or lower the alarm. The
 		// first question to ask is: Were we already under an alarm?
 		//----------------------------------------------------------------------
-
 		if (g_RampControl.dieTempAlarm) {
 
 			//------------------------------------------------------------------
@@ -286,13 +276,11 @@ void ddi_bc_RampUpdateAlarms()
 			// change that if the high end of the temperature range drops below
 			// the low temperature mark.
 			//------------------------------------------------------------------
-
 			if (i16High < g_ddi_bc_Configuration.u8DieTempLow) {
 
 				//--------------------------------------------------------------
 				// If control arrives here, we're safe now. Drop the alarm.
 				//--------------------------------------------------------------
-
 				g_RampControl.dieTempAlarm = 0;
 
 				iStepTheRamp = !0;
@@ -304,24 +292,22 @@ void ddi_bc_RampUpdateAlarms()
 				       (int32_t) g_ddi_bc_Configuration.
 				       u8DieTempLow);
 #endif
-
 			}
 
-		} else {
+		}
+        else {
 
 			//------------------------------------------------------------------
 			// If control arrives here, we were not under an alarm. We'll change
 			// that if the high end of the temperature range rises above the
 			// high temperature mark.
 			//------------------------------------------------------------------
-
 			if (i16High >= g_ddi_bc_Configuration.u8DieTempHigh) {
 
 				//--------------------------------------------------------------
 				// If control arrives here, we're running too hot. Raise the
 				// alarm.
 				//--------------------------------------------------------------
-
 				g_RampControl.dieTempAlarm = 1;
 
 				iStepTheRamp = !0;
@@ -334,14 +320,12 @@ void ddi_bc_RampUpdateAlarms()
 				       u8DieTempLow);
 #endif
 			}
-
 		}
-
 	}
+
 	//--------------------------------------------------------------------------
 	// Are we monitoring battery temperature?
 	//--------------------------------------------------------------------------
-
 	if (g_ddi_bc_Configuration.monitorBatteryTemp) {
 
 		ddi_bc_Status_t status;
@@ -349,9 +333,7 @@ void ddi_bc_RampUpdateAlarms()
 		//----------------------------------------------------------------------
 		// Get the battery temperature reading.
 		//----------------------------------------------------------------------
-
 		uint16_t u16Reading;
-
 		status = ddi_bc_hwGetBatteryTemp(&u16Reading);
 
 		//----------------------------------------------------------------------
@@ -365,57 +347,46 @@ void ddi_bc_RampUpdateAlarms()
 			// Now we need to decide if it's time to raise or lower the alarm.
 			// The first question to ask is: Were we already under an alarm?
 			//------------------------------------------------------------------
-
 			if (g_RampControl.batteryTempAlarm) {
 
 				//--------------------------------------------------------------
 				// If control arrives here, we were already under an alarm.
 				// We'll change that if the reading drops below the low mark.
 				//--------------------------------------------------------------
-
-				if (u16Reading <
-				    g_ddi_bc_Configuration.u16BatteryTempLow) {
+				if (u16Reading > g_ddi_bc_Configuration.u16BatteryTempLow) {
 
 					//----------------------------------------------------------
 					// If control arrives here, we're safe now. Drop the alarm.
 					//----------------------------------------------------------
-
 					g_RampControl.batteryTempAlarm = 0;
 
 					iStepTheRamp = !0;
 
 				}
-
-			} else {
+			}
+            else {
 
 				//--------------------------------------------------------------
 				// If control arrives here, we were not under an alarm. We'll
 				// change that if the reading rises above the high mark.
 				//--------------------------------------------------------------
-
-				if (u16Reading >=
-				    g_ddi_bc_Configuration.u16BatteryTempHigh) {
+				if (u16Reading <= g_ddi_bc_Configuration.u16BatteryTempHigh) {
 
 					//----------------------------------------------------------
 					// If control arrives here, we're running too hot. Raise the
 					// alarm.
 					//----------------------------------------------------------
-
 					g_RampControl.batteryTempAlarm = 1;
 
 					iStepTheRamp = !0;
-
 				}
-
 			}
-
 		}
-
 	}
+
 	//--------------------------------------------------------------------------
 	// Do we need to step the ramp?
 	//--------------------------------------------------------------------------
-
 	if (iStepTheRamp)
 		ddi_bc_RampStep(0);
 
@@ -475,7 +446,8 @@ int ddi_bc_RampGetAmbientTempAlarm(void)
 //!
 //! \fntype Function
 //!
-//! This function steps the current ramp forward through the given amount of time.
+//! This function steps the current ramp forward through the given amount
+//! of time.
 //!
 //! \param[in] u32Time  The time increment to add.
 //!
@@ -486,7 +458,6 @@ int ddi_bc_RampGetAmbientTempAlarm(void)
 ////////////////////////////////////////////////////////////////////////////////
 ddi_bc_Status_t ddi_bc_RampStep(uint32_t u32Time)
 {
-
 	uint16_t u16MaxNow;
 	uint16_t u16Target;
 	uint16_t u16Cart;
@@ -495,46 +466,42 @@ ddi_bc_Status_t ddi_bc_RampStep(uint32_t u32Time)
 	//--------------------------------------------------------------------------
 	// Make sure the Battery Charger is initialized.
 	//--------------------------------------------------------------------------
-
-	if (g_ddi_bc_State == DDI_BC_STATE_UNINITIALIZED) {
+	if (g_ddi_bc_State == DDI_BC_STATE_UNINITIALIZED)
 		return (DDI_BC_STATUS_NOT_INITIALIZED);
-	}
+
+
 	//--------------------------------------------------------------------------
 	// Figure out how much current the hardware is set to draw right now.
 	//--------------------------------------------------------------------------
-
 	u16MaxNow = ddi_bc_hwGetMaxCurrent();
+
 
 	//--------------------------------------------------------------------------
 	// Start with the target.
 	//--------------------------------------------------------------------------
-
 	u16Target = g_RampControl.u16Target;
+
 
 	//--------------------------------------------------------------------------
 	// Check the target against the hard limit.
 	//--------------------------------------------------------------------------
-
 	if (u16Target > g_RampControl.u16Limit)
 		u16Target = g_RampControl.u16Limit;
+
 
 	//--------------------------------------------------------------------------
 	// Check if the die temperature alarm is active.
 	//--------------------------------------------------------------------------
-
 	if (g_RampControl.dieTempAlarm) {
 
 		//----------------------------------------------------------------------
 		// If control arrives here, we are under a die temperature alarm. Clamp
 		// the target current.
 		//----------------------------------------------------------------------
-
-		if (u16Target > g_ddi_bc_Configuration.u16DieTempSafeCurrent) {
-			u16Target =
-			    g_ddi_bc_Configuration.u16DieTempSafeCurrent;
-		}
-
+		if (u16Target > g_ddi_bc_Configuration.u16DieTempSafeCurrent)
+			u16Target = g_ddi_bc_Configuration.u16DieTempSafeCurrent;
 	}
+
 	//--------------------------------------------------------------------------
 	// Check if the battery temperature alarm is active.
 	//--------------------------------------------------------------------------
@@ -545,32 +512,28 @@ ddi_bc_Status_t ddi_bc_RampStep(uint32_t u32Time)
 		// If control arrives here, we are under a battery temperature alarm.
 		// Clamp the target current.
 		//----------------------------------------------------------------------
-
-		if (u16Target >
-		    g_ddi_bc_Configuration.u16BatteryTempSafeCurrent) {
-			u16Target =
-			    g_ddi_bc_Configuration.u16BatteryTempSafeCurrent;
-		}
+		if (u16Target > g_ddi_bc_Configuration.u16BatteryTempSafeCurrent)
+			u16Target = g_ddi_bc_Configuration.u16BatteryTempSafeCurrent;
 
 	}
+
 	//--------------------------------------------------------------------------
 	// Now we know the target current. Figure out what is actually expressible
 	// in the hardware.
 	//--------------------------------------------------------------------------
-
 	u16Target = ddi_bc_hwExpressibleCurrent(u16Target);
+
 
 	//--------------------------------------------------------------------------
 	// Compute the difference between the expressible target and what's actually
 	// set in the hardware right now.
 	//--------------------------------------------------------------------------
-
 	i32Delta = ((int32_t) u16Target) - ((int32_t) u16MaxNow);
+
 
 	//--------------------------------------------------------------------------
 	// Check if the delta is zero.
 	//--------------------------------------------------------------------------
-
 	if (i32Delta == 0) {
 
 		//----------------------------------------------------------------------
@@ -580,20 +543,17 @@ ddi_bc_Status_t ddi_bc_RampStep(uint32_t u32Time)
 		// Before we leave, though, we don't want to leave any accumulated time
 		// laying around for the next ramp up. Zero it out.
 		//----------------------------------------------------------------------
-
 		g_RampControl.u32AccumulatedTime = 0;
 
 		//----------------------------------------------------------------------
 		// Return success.
 		//----------------------------------------------------------------------
-
 		return (DDI_BC_STATUS_SUCCESS);
-
 	}
+
 	//--------------------------------------------------------------------------
 	// Check if the delta is negative.
 	//--------------------------------------------------------------------------
-
 	if (i32Delta < 0) {
 
 		//----------------------------------------------------------------------
@@ -601,54 +561,51 @@ ddi_bc_Status_t ddi_bc_RampStep(uint32_t u32Time)
 		// currently set in the hardware. Since that means we're *reducing* the
 		// current draw, we can do it right now. Just gimme a sec here...
 		//----------------------------------------------------------------------
-
 		ddi_bc_hwSetMaxCurrent(u16Target);
 
 #ifdef CONFIG_POWER_SUPPLY_DEBUG
-		printk("Battery charger: setting max charge "
-		       "current to: %hdmA\r\n", u16Target);
+//		printk("Battery charger: setting max charge "
+//		       "current to: %hdmA\r\n", u16Target);
 #endif
 
 		//----------------------------------------------------------------------
 		// Flip the power switch on the charging hardware according to the new
 		// current setting.
 		//----------------------------------------------------------------------
-
 		ddi_bc_hwSetChargerPower(u16Target != 0);
+
 
 		//----------------------------------------------------------------------
 		// We don't want to leave any accumulated time laying around for the
 		// next ramp up. Zero it out.
 		//----------------------------------------------------------------------
-
 		g_RampControl.u32AccumulatedTime = 0;
+
 
 		//----------------------------------------------------------------------
 		// Return success.
 		//----------------------------------------------------------------------
-
 		return (DDI_BC_STATUS_SUCCESS);
-
 	}
+
 	//--------------------------------------------------------------------------
 	// If control arrives here, the target current is higher than what's set in
 	// the hardware right now. That means we're going to ramp it up. To do that,
 	// we're going to "buy" more milliamps by "spending" milliseconds of time.
 	// Add the time we've "banked" to the time we've been credited in this call.
 	//--------------------------------------------------------------------------
-
 	u32Time += g_RampControl.u32AccumulatedTime;
+
 
 	//--------------------------------------------------------------------------
 	// Now we know how much we can spend. How much current will it buy?
 	//--------------------------------------------------------------------------
-
 	u16Cart = (g_ddi_bc_Configuration.u16CurrentRampSlope * u32Time) / 1000;
+
 
 	//--------------------------------------------------------------------------
 	// Check how the current we can afford stacks up against the target we want.
 	//--------------------------------------------------------------------------
-
 	if ((u16MaxNow + u16Cart) < u16Target) {
 
 		//----------------------------------------------------------------------
@@ -656,14 +613,13 @@ ddi_bc_Status_t ddi_bc_RampStep(uint32_t u32Time)
 		// want. Compute the maximum we can afford, and then figure out what we
 		// can actually express in the hardware.
 		//----------------------------------------------------------------------
-
 		u16Target = ddi_bc_hwExpressibleCurrent(u16MaxNow + u16Cart);
+
 
 		//----------------------------------------------------------------------
 		// Check if the result isn't actually different from what's set in the
 		// the hardware right now.
 		//----------------------------------------------------------------------
-
 		if (u16Target == u16MaxNow) {
 
 			//------------------------------------------------------------------
@@ -672,48 +628,45 @@ ddi_bc_Status_t ddi_bc_RampStep(uint32_t u32Time)
 			// hardware setting. Since we didn't spend any of our time, put the
 			// new balance back in the bank.
 			//------------------------------------------------------------------
-
 			g_RampControl.u32AccumulatedTime = u32Time;
+
 
 			//------------------------------------------------------------------
 			// Leave dispiritedly.
 			//------------------------------------------------------------------
-
 			return (DDI_BC_STATUS_SUCCESS);
-
 		}
-
 	}
+
+
 	//--------------------------------------------------------------------------
 	// If control arrives here, we can afford to buy enough current to get us
 	// all the way to the target. Set it.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_hwSetMaxCurrent(u16Target);
 
 #ifdef CONFIG_POWER_SUPPLY_DEBUG
-	printk("Battery charger: setting max charge"
-	       "current to: %hdmA\r\n", u16Target);
+//	printk("Battery charger: setting max charge"
+//	       "current to: %hdmA\r\n", u16Target);
 #endif
 
 	//--------------------------------------------------------------------------
 	// Flip the power switch on the charging hardware according to the new
 	// current setting.
 	//--------------------------------------------------------------------------
-
 	ddi_bc_hwSetChargerPower(u16Target != 0);
+
 
 	//--------------------------------------------------------------------------
 	// We're at the target, so we're finished buying current. Zero out the
 	// account.
 	//--------------------------------------------------------------------------
-
 	g_RampControl.u32AccumulatedTime = 0;
+
 
 	//--------------------------------------------------------------------------
 	// Return success.
 	//--------------------------------------------------------------------------
-
 	return (DDI_BC_STATUS_SUCCESS);
 
 }

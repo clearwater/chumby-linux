@@ -23,8 +23,16 @@
 #include <linux/platform_device.h>
 #include <linux/fsl_devices.h>
 #include <linux/usb/otg.h>
+#include <mach/regs-pinctrl.h>
+#include <mach/regs-power.h>
+#include <mach/regs-usbctrl.h>
 
 #include "ehci-fsl.h"
+
+/* This parameter causes the TX FIFO buffer thresh to be increased,
+ * and enables our LOCAL_5V_ON GPIO modifications.
+ */
+#define CHUMBY_USB_MODIFICATIONS
 
 extern struct resource *otg_get_resources(void);
 
@@ -332,6 +340,22 @@ static void fsl_setup_phy(struct ehci_hcd *ehci,
 	ehci_writel(ehci, portsc, &ehci->regs->port_status[port_offset]);
 }
 
+#ifdef CHUMBY_USB_MODIFICATIONS
+static int ehci_fsl_run (struct usb_hcd *hcd)
+{
+	int ret = ehci_run(hcd);
+
+	/* Alter the TX fifo threshhold.  If we don't do this, the buffer will
+	 * transmit when it's not completely filled, which can cause problems
+	 * with e.g. the rt73 driver.
+	 * Note this parameter will have to be tuned!
+	 */
+	HW_USBCTRL_TXFILLTUNING_WR(0x003f0020);
+
+	return ret;
+}
+#endif
+
 /* called after powerup, by probe or system-pm "wakeup" */
 static int ehci_fsl_reinit(struct ehci_hcd *ehci)
 {
@@ -375,6 +399,61 @@ static int ehci_fsl_setup(struct usb_hcd *hcd)
 	ehci_reset(ehci);
 
 	retval = ehci_fsl_reinit(ehci);
+
+
+#ifdef CHUMBY_USB_MODIFICATIONS
+	/* Also, disable the IRQ for the 5V line.  Turning on the screen causes
+	 * a massive drop in power, and the battery circuitry thinks we've
+	 * pulled the 5V line.
+	 */
+	HW_POWER_CTRL_CLR(1);
+
+
+
+
+	/* Wait just enough time for the brownout.  Any less than this and it
+	 * reboots when we bring the USB card up, or segfaults.
+	 */
+	msleep(5);
+
+
+	/* Set bank 0, pins 26 and 28 to GPIO. */
+	HW_PINCTRL_MUXSEL1_SET(0x03300000);
+
+
+	/* Set both pins to low, which ensures a reset takes place. */
+	HW_PINCTRL_DOUT0_CLR(0x24000000);
+	HW_PINCTRL_DOE0_SET(0x24000000);
+	HW_PINCTRL_DOUT0_CLR(0x24000000);
+	msleep(5);
+
+
+	/* Delay for one second, giving most USB devices the chance to
+	 * recognize they've been "unplugged".
+	 */
+	msleep(1000);
+
+
+	/* Write a "1" to bank 0, pin 28. */
+	HW_PINCTRL_DOUT0_SET(0x20000000);
+	msleep(5);
+
+
+	/* Write a "1" to bank 0, pin 26, to disable USB.  This ensures a reset.
+	 * Wait a short time after, then re-enable the IRQ that fires when power
+	 * is pulled.  This is because by now, the voltages should have
+	 * stabilized.
+	 */
+	HW_PINCTRL_DOUT0_SET(0x04000000);
+	msleep(5);
+
+
+	/* Re-enable the power interrupt. */
+	HW_POWER_CTRL_SET(1);
+
+
+#endif /*CHUMBY_USB_MODIFICATIONS*/
+
 	return retval;
 }
 
@@ -393,7 +472,11 @@ static const struct hc_driver ehci_fsl_hc_driver = {
 	 * basic lifecycle operations
 	 */
 	.reset = ehci_fsl_setup,
+#ifdef CHUMBY_USB_MODIFICATIONS
+	.start = ehci_fsl_run,
+#else
 	.start = ehci_run,
+#endif
 	.stop = ehci_stop,
 	.shutdown = ehci_shutdown,
 

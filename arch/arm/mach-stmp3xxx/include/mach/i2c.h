@@ -32,17 +32,21 @@ int hw_i2c_init(struct device *dev);
 void hw_i2c_stop(struct device *dev);
 void hw_i2c_setup_write(u8 addr, void *buff, int len, int flags);
 void hw_i2c_setup_read(u8 addr, void *buff, int len, int flags);
+void hw_i2c_setup_writeread(u8 addr, void *buff, int len, int flags);
 void hw_i2c_run(int dir);
 void hw_i2c_reset_dma(void);
 void hw_i2c_finish_read(void *buff, int len);
+void hw_i2c_finish_writeread(void *buff, int len);
 
 struct stmp378x_i2c_dev {
 	struct device		*dev;
 	int			irq_dma;
 	int			irq_err;
-	struct completion	cmd_complete;
 	u32			cmd_err;
 	struct i2c_adapter	adapter;
+	wait_queue_head_t cmd_wq;
+	int			finished;
+	int			packet_count;
 };
 
 #endif

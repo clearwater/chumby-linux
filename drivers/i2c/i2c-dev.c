@@ -270,7 +270,13 @@ static noinline int i2cdev_ioctl_rdrw(struct i2c_client *client,
 
 	res = i2c_transfer(client->adapter, rdwr_pa, rdwr_arg.nmsgs);
 	while (i-- > 0) {
-		if (res >= 0 && (rdwr_pa[i].flags & I2C_M_RD)) {
+		// CHUMBY_i2c_rdwr_fix
+		// We modified this to copy data to the user if they didn't specify
+		// a read, but gave an address where "Read" was set.  This is to
+		// take advantage of the write-then-read nature of such devices as
+		// FM radios, that combine the select-register command along with
+		// the get-register command.
+		if (res >= 0 && ((rdwr_pa[i].flags & I2C_M_RD) || rdwr_pa[i].addr & 1)) {
 			if (copy_to_user(data_ptrs[i], rdwr_pa[i].buf,
 					 rdwr_pa[i].len))
 				res = -EFAULT;

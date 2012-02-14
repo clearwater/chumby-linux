@@ -34,6 +34,10 @@
 #include <mach/irqs.h>
 #include <mach/regs-rtc.h>
 
+//#define CHLOG(format, arg...)            \
+//    printk("rtc-stmp3xxx.c - %s():%d - " format, __func__, __LINE__, ## arg)
+
+
 struct stmp3xxx_rtc_data {
 	struct rtc_device *rtc;
 	unsigned irq_count;
@@ -60,13 +64,19 @@ static int stmp3xxx_rtc_settime(struct device *dev, struct rtc_time *rtc_tm)
 		/* The datasheet doesn't say which way round the
 		 * NEW_REGS/STALE_REGS bitfields go. In fact it's 0x1=P0,
 		 * 0x2=P1, .., 0x20=P5, 0x40=ALARM, 0x80=SECONDS,
+		 *
+		 * 15/01/2010 SMC - I suspect this bit won't change if we're using
+		 * the 32.768 kHz crystal here.
 		 */
+		/*
 		while (HW_RTC_STAT_RD() & BF_RTC_STAT_NEW_REGS(0x80))
 			cpu_relax();
+		*/
 	}
 	return rc;
 }
 
+void stmp3xxx_ensure_power(void);
 static irqreturn_t stmp3xxx_rtc_interrupt(int irq, void *dev_id)
 {
 	struct platform_device *pdev = to_platform_device(dev_id);
@@ -74,11 +84,17 @@ static irqreturn_t stmp3xxx_rtc_interrupt(int irq, void *dev_id)
 	u32 status;
 	u32 events = 0;
 
+//    CHLOG("RTC interrupt.\n");
 	status = HW_RTC_CTRL_RD() &
 			(BM_RTC_CTRL_ALARM_IRQ | BM_RTC_CTRL_ONEMSEC_IRQ);
 	if (status & BM_RTC_CTRL_ALARM_IRQ) {
+//        CHLOG("Was an alarm interrupt\n");
 		HW_RTC_CTRL_CLR(BM_RTC_CTRL_ALARM_IRQ);
 		events |= RTC_AF | RTC_IRQF;
+
+        // Ensure the device is in the "on" state.
+        stmp3xxx_ensure_power();
+
 	}
 	if (status & BM_RTC_CTRL_ONEMSEC_IRQ) {
 		HW_RTC_CTRL_CLR(BM_RTC_CTRL_ONEMSEC_IRQ);
@@ -98,12 +114,14 @@ static int stmp3xxx_rtc_open(struct device *dev)
 {
 	int r;
 
+    /*
 	r = request_irq(IRQ_RTC_ALARM, stmp3xxx_rtc_interrupt,
 			IRQF_DISABLED, "RTC alarm", dev);
 	if (r) {
 		dev_err(dev, "Cannot claim IRQ%d\n", IRQ_RTC_ALARM);
 		goto fail_1;
 	}
+    */
 	r = request_irq(IRQ_RTC_1MSEC, stmp3xxx_rtc_interrupt,
 			IRQF_DISABLED, "RTC tick", dev);
 	if (r) {
@@ -113,15 +131,14 @@ static int stmp3xxx_rtc_open(struct device *dev)
 
 	return 0;
 fail_2:
-	free_irq(IRQ_RTC_ALARM, dev);
-fail_1:
+//fail_1:
 	return r;
 }
 
 static void stmp3xxx_rtc_release(struct device *dev)
 {
 	HW_RTC_CTRL_CLR(BM_RTC_CTRL_ALARM_IRQ_EN | BM_RTC_CTRL_ONEMSEC_IRQ_EN);
-	free_irq(IRQ_RTC_ALARM, dev);
+	//free_irq(IRQ_RTC_ALARM, dev);
 	free_irq(IRQ_RTC_1MSEC, dev);
 }
 
@@ -169,6 +186,10 @@ static int stmp3xxx_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alm)
 
 	rtc_tm_to_time(&alm->time, &t);
 	HW_RTC_ALARM_WR(t);
+	HW_RTC_PERSISTENT0_SET(BM_RTC_PERSISTENT0_ALARM_EN |
+				BM_RTC_PERSISTENT0_ALARM_WAKE_EN);
+    HW_RTC_CTRL_SET(BM_RTC_CTRL_ALARM_IRQ_EN);
+    HW_RTC_CTRL_CLR(BM_RTC_CTRL_ALARM_IRQ);
 	return 0;
 }
 
@@ -186,6 +207,7 @@ static int stmp3xxx_rtc_remove(struct platform_device *dev)
 {
 	struct stmp3xxx_rtc_data *rtc_data = platform_get_drvdata(dev);
 
+	free_irq(IRQ_RTC_ALARM, dev);
 	if (rtc_data) {
 		rtc_device_unregister(rtc_data->rtc);
 		kfree(rtc_data);
@@ -200,6 +222,7 @@ static int stmp3xxx_rtc_probe(struct platform_device *pdev)
 	u32 rtc_stat = HW_RTC_STAT_RD();
 	struct stmp3xxx_rtc_data *rtc_data = kzalloc(sizeof *rtc_data,
 						     GFP_KERNEL);
+	int r;
 
 	if ((rtc_stat & BM_RTC_STAT_RTC_PRESENT) == 0)
 		return -ENODEV;
@@ -212,10 +235,20 @@ static int stmp3xxx_rtc_probe(struct platform_device *pdev)
 				BM_RTC_PERSISTENT0_ALARM_WAKE_EN |
 				BM_RTC_PERSISTENT0_ALARM_WAKE);
 
+	/* Set HW_RTC_SECONDS to pull from the 32 kHz crystal */
+	HW_RTC_PERSISTENT0_CLR(BM_RTC_PERSISTENT0_XTAL32_FREQ);
+	HW_RTC_PERSISTENT0_SET(BM_RTC_PERSISTENT0_CLOCKSOURCE |
+				BM_RTC_PERSISTENT0_XTAL32KHZ_PWRUP);
+
+	/* Power down the 24 MHz crystal when we're off, since we don't use it */
+	HW_RTC_PERSISTENT0_CLR(BM_RTC_PERSISTENT0_XTAL24MHZ_PWRUP);
+
 	printk(KERN_INFO "STMP3xxx RTC driver v1.0 hardware v%u.%u.%u\n",
 	       (hwversion >> 24),
 	       (hwversion >> 16) & 0xFF,
 	       hwversion & 0xFFFF);
+
+    device_set_wakeup_capable(&pdev->dev, 1);
 
 	rtc_data->rtc = rtc_device_register(pdev->name, &pdev->dev,
 				&stmp3xxx_rtc_ops, THIS_MODULE);
@@ -226,7 +259,20 @@ static int stmp3xxx_rtc_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, rtc_data);
 
+
+	r = request_irq(IRQ_RTC_ALARM, stmp3xxx_rtc_interrupt,
+			IRQF_DISABLED, "RTC alarm", &pdev->dev);
+	if (r) {
+		dev_err(&pdev->dev, "Cannot claim IRQ%d\n", IRQ_RTC_ALARM);
+		goto fail_1;
+	}
+
+
 	return 0;
+
+fail_1:
+	free_irq(IRQ_RTC_ALARM, &pdev->dev);
+    return 0;
 }
 
 #ifdef CONFIG_PM

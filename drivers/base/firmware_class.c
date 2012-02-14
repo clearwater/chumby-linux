@@ -142,19 +142,20 @@ static ssize_t firmware_loading_store(struct device *dev,
 	struct firmware_priv *fw_priv = dev_get_drvdata(dev);
 	int loading = simple_strtol(buf, NULL, 10);
 
+
+	mutex_lock(&fw_lock);
+	if (!fw_priv->fw) {
+		mutex_unlock(&fw_lock);
+		return -ENODEV;
+	}
+
 	switch (loading) {
 	case 1:
-		mutex_lock(&fw_lock);
-		if (!fw_priv->fw) {
-			mutex_unlock(&fw_lock);
-			break;
-		}
 		vfree(fw_priv->fw->data);
 		fw_priv->fw->data = NULL;
 		fw_priv->fw->size = 0;
 		fw_priv->alloc_size = 0;
 		set_bit(FW_STATUS_LOADING, &fw_priv->status);
-		mutex_unlock(&fw_lock);
 		break;
 	case 0:
 		if (test_bit(FW_STATUS_LOADING, &fw_priv->status)) {
@@ -170,6 +171,7 @@ static ssize_t firmware_loading_store(struct device *dev,
 		fw_load_abort(fw_priv);
 		break;
 	}
+	mutex_unlock(&fw_lock);
 
 	return count;
 }

@@ -32,6 +32,6 @@
 
 #define ISA_DMA_THRESHOLD	(0x0003ffffULL)
 
-#define CONSISTENT_DMA_SIZE	SZ_4M
+#define CONSISTENT_DMA_SIZE	SZ_8M
 
 #endif

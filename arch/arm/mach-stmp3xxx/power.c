@@ -26,6 +26,7 @@
 #include <mach/regulator.h>
 #include <mach/regs-power.h>
 #include <mach/stmp3xxx.h>
+#include <mach/cpu.h>
 
 static int get_voltage(struct stmp3xxx_regulator *sreg)
 {
@@ -422,22 +423,22 @@ static struct stmp3xxx_platform_regulator_data sibling_cur_data = {
 };
 
 static struct platform_device *devices[] = {
-	&stmp3xxx_keyboard,
+	&stmp3xxx_framebuffer,
+	&stmp3xxx_backlight,
+//	&stmp3xxx_keyboard,
 	&stmp3xxx_touchscreen,
-	&stmp3xxx_appuart,
+//	&stmp3xxx_appuart,
 	&stmp3xxx_dbguart,
 	&stmp3xxx_watchdog,
 	&stmp3xxx_rtc,
-	&stmp3xxx_framebuffer,
-	&stmp3xxx_backlight,
 	&stmp3xxx_rotdec,
 	&stmp378x_i2c,
 	&stmp3xxx_persistent,
-	&stmp3xxx_dcp_bootstream,
+//	&stmp3xxx_dcp_bootstream,
 	&stmp3xxx_dcp,
-	&stmp3xxx_mtest,
+//	&stmp3xxx_mtest,
 	&stmp3xxx_battery,
-	&stmp3xxx_pxp,
+//	&stmp3xxx_pxp,
 };
 
 static int sibling_current_devices_num;

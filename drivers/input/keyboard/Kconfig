@@ -345,4 +345,12 @@ config KEYBOARD_STMP3XXX
 	help
 	 -to be written-
 
+config KEYBOARD_CHUMBY_BEND
+	tristate "Chumby bend sensor keyboard"
+	depends on ARCH_STMP3XXX
+    default m
+	help
+    	Treat the Chumby "bend" switch as a keyboard device.  When pressed,
+        the keyboard will see the "C" key pressed.
+
 endif

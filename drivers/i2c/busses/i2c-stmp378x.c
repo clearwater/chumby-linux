@@ -3,7 +3,7 @@
  *
  * Author: Dmitrij Frasenyak <sed@embeddedalley.com>
  *
- * Copyright 2008-2009 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright 2008 Freescale Semiconductor, Inc. All Rights Reserved.
  * Copyright 2008 Embedded Alley Solutions, Inc All Rights Reserved.
  */
 
@@ -31,6 +31,10 @@
 #include <mach/regs-i2c.h>
 #include <mach/regs-apbx.h>
 #include <mach/i2c.h>
+
+static DECLARE_WAIT_QUEUE_HEAD(cmd_wq);
+
+
 
 static void reset_i2c_module(void)
 {
@@ -62,7 +66,7 @@ static int stmp378x_i2c_xfer_msg(struct i2c_adapter *adap,
 	struct stmp378x_i2c_dev *dev = i2c_get_adapdata(adap);
 	int err;
 
-	init_completion(&dev->cmd_complete);
+//	init_completion(&dev->cmd_complete);
 	dev->cmd_err = 0;
 
 	dev_dbg(dev->dev, " Start XFER ===>\n");
@@ -72,7 +76,22 @@ static int stmp378x_i2c_xfer_msg(struct i2c_adapter *adap,
 	if ((msg->len == 0) || (msg->len > (PAGE_SIZE - 1)))
 		return -EINVAL;
 
-	if (msg->flags & I2C_M_RD) {
+// CHUMBY_radio_fix
+// We need to do this special case because of how the FM radio works.
+// Basically, you need to send a "Read" message, but write the register
+// you want to read as the first packet.
+// Therefore, we make a special case for write-then-read when we don't have
+// an I2C_M_RD flag but DO have an I2C address with the "read" bit set.
+    if((!msg->flags & I2C_M_RD) && (msg->addr & 1)) {
+        dev->packet_count = 2;
+        hw_i2c_setup_writeread(msg->addr,
+                msg->buf,
+                msg->len,
+                stop ? BM_I2C_CTRL0_POST_SEND_STOP : 0);
+		hw_i2c_run(2); /* read */
+    }
+    else if (msg->flags & I2C_M_RD) {
+        dev->packet_count = 1;
 		hw_i2c_setup_read(msg->addr ,
 				  msg->buf ,
 				  msg->len,
@@ -80,6 +99,7 @@ static int stmp378x_i2c_xfer_msg(struct i2c_adapter *adap,
 
 		hw_i2c_run(1); /* read */
 	} else {
+        dev->packet_count = 1;
 		hw_i2c_setup_write(msg->addr ,
 				   msg->buf ,
 				   msg->len,
@@ -88,10 +108,14 @@ static int stmp378x_i2c_xfer_msg(struct i2c_adapter *adap,
 		hw_i2c_run(0); /* write */
 	}
 
-	err = wait_for_completion_interruptible_timeout(
-		&dev->cmd_complete,
-		msecs_to_jiffies(1000)
-		);
+    dev->finished = 0;
+    err = wait_event_interruptible_timeout(cmd_wq, dev->finished == 1, msecs_to_jiffies(50));
+//	err = wait_for_completion_interruptible_timeout(
+//		&dev->cmd_complete,
+//		msecs_to_jiffies(1)
+//		);
+//    mdelay(1);
+    
 
 	if (err < 0) {
 		dev_dbg(dev->dev, "controler is timed out\n");
@@ -99,6 +123,9 @@ static int stmp378x_i2c_xfer_msg(struct i2c_adapter *adap,
 	}
 	if ((!dev->cmd_err) && (msg->flags & I2C_M_RD))
 		hw_i2c_finish_read(msg->buf, msg->len);
+    else if ((!dev->cmd_err) && !(msg->flags & I2C_M_RD) && (msg->addr & 1))
+		hw_i2c_finish_writeread(msg->buf, msg->len);
+//    printk("Okay, the value in the buffer is now: 0x%08x\n", *((int *)msg->buf));
 
 	dev_dbg(dev->dev, "<============= Done with err=%d\n", dev->cmd_err);
 
@@ -117,6 +144,8 @@ stmp378x_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 		return -EINVAL;
 
 	for (i = 0; i < num; i++) {
+//		printk("Calling stmp378x_i2c_xfer_msg(%p, %p, (%d == (%d - 1)):%d)",
+//                adap, &msgs[i], i, num, (i == (num - 1)));
 		err = stmp378x_i2c_xfer_msg(adap, &msgs[i], (i == (num - 1)));
 		if (err)
 			break;
@@ -141,7 +170,21 @@ stmp378x_i2c_func(struct i2c_adapter *adap)
 static irqreturn_t
 stmp378x_i2c_dma_isr(int this_irq, void *dev_id)
 {
+	struct stmp378x_i2c_dev *dev = dev_id;
+    int cmd_value = HW_APBX_CHn_CMD_RD(3);
 	hw_i2c_clear_dma_interrupt();
+
+    // Indicate completion of the transfer(s) if the DMA engine has no more
+    // data to transfer.
+//    printk(">>> Got a completion IRQ: %p %p (%p)\n", HW_APBX_CHn_NXTCMDAR_RD(3), cmd_value, cmd_value&0xffff0000);
+//    if(!HW_APBX_CHn_NXTCMDAR_RD(3))
+    if(!(cmd_value&0xffff0000)) { //HW_APBX_CHn_NXTCMDAR_RD(3))
+//        complete(&dev->cmd_complete);
+        dev->finished = 1;
+        wake_up_interruptible(&cmd_wq);
+    }
+//    else
+//        printk(">>> Looks like it's not the last transfer, either.\n");
 	return IRQ_HANDLED;
 
 }
@@ -153,9 +196,10 @@ stmp378x_i2c_isr(int this_irq, void *dev_id)
 {
 	struct stmp378x_i2c_dev *dev = dev_id;
 	u32 stat;
-	u32 done_mask =
-		BM_I2C_CTRL1_DATA_ENGINE_CMPLT_IRQ |
-		BM_I2C_CTRL1_BUS_FREE_IRQ ;
+//	u32 done_mask =
+//		BM_I2C_CTRL1_DATA_ENGINE_CMPLT_IRQ  |
+//		BM_I2C_CTRL1_BUS_FREE_IRQ           |
+//        0;
 
 	stat = HW_I2C_CTRL1_RD() & I2C_IRQ_MASK;
 	if (!stat)
@@ -172,7 +216,8 @@ stmp378x_i2c_isr(int this_irq, void *dev_id)
 		hw_i2c_reset_dma();
 		reset_i2c_module();
 
-		complete(&dev->cmd_complete);
+//		complete(&dev->cmd_complete);
+        wake_up_interruptible(&cmd_wq);
 
 		goto done;
 	}
@@ -185,11 +230,21 @@ stmp378x_i2c_isr(int this_irq, void *dev_id)
 		    BM_I2C_CTRL1_SLAVE_IRQ
 		    )) {
 		dev->cmd_err = -EIO;
-		complete(&dev->cmd_complete);
+//		complete(&dev->cmd_complete);
+        wake_up_interruptible(&cmd_wq);
 		goto done;
 	}
-	if ((stat & done_mask)  == done_mask)
-		complete(&dev->cmd_complete);
+
+    // Happy case: The I2C transfer completed without error.
+    // This will be handled in the DMA completion IRQ.
+//    printk(">>> Got a completion IRQ (packet_count %d -> %d ; stat: 0x%08x / 0x%08x)\n",
+//            dev->packet_count, dev->packet_count-1, stat, stat & done_mask);
+//    dev->packet_count--;
+//	if (((stat & done_mask) == done_mask) && (dev->packet_count == 0)) {
+//        printk(">>>     And it was the last packet!\n");
+//		complete(&dev->cmd_complete);
+//        wake_up_interruptible(&cmd_wq);
+//    }
 
 
 done:
@@ -242,9 +297,7 @@ stmp378x_i2c_probe(struct platform_device *pdev)
 		goto no_err_irq;
 	}
 
-	err = request_irq(dev->irq_dma,
-			  stmp378x_i2c_dma_isr,
-			  0, pdev->name, dev);
+	err = request_irq(dev->irq_dma, stmp378x_i2c_dma_isr, 0, pdev->name, dev);
 	if (err) {
 		dev_err(&pdev->dev, "Can't get IRQ\n");
 		goto no_dma_irq;
@@ -274,6 +327,14 @@ stmp378x_i2c_probe(struct platform_device *pdev)
 
 	}
 
+
+    // Init the waitqueue we'll use to wait for the IRQ to fire when we
+    // submit data to the I2C controller.
+//    init_waitqueue_head(&dev->cmd_wq);
+
+    platform_set_drvdata(pdev, dev);
+
+
 	return 0;
 
 no_i2c_adapter:
@@ -293,6 +354,26 @@ stmp378x_i2c_remove(struct platform_device *pdev)
 {
 	struct stmp378x_i2c_dev	*dev = platform_get_drvdata(pdev);
 	int res;
+
+    if(!pdev) {
+        printk("Platform device specified was NULL!\n");
+        return -EBUSY;
+    }
+    if(!dev) {
+        printk("Decoded device was NULL!\n");
+        return -EBUSY;
+    }
+    /*
+    if(!dev->adapter->nr) {
+        printk("Adapter number portion of device was NULL!\n");
+        return -EBUSY;
+    }
+    */
+
+    platform_set_drvdata(pdev, NULL);
+
+    printk("Unloading adapter adap->nr: %d\n", dev->adapter.nr);
+
 
 	res = i2c_del_adapter(&dev->adapter);
 	if (res)
@@ -335,3 +416,4 @@ module_exit(stmp378x_i2c_exit_driver);
 MODULE_AUTHOR("old_chap@embeddedalley.com");
 MODULE_DESCRIPTION("IIC for Freescale STMP378x");
 MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform:i2c_stmp");

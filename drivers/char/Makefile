@@ -9,6 +9,10 @@ FONTMAPFILE = cp437.uni
 
 obj-y	 += mem.o random.o tty_io.o n_tty.o tty_ioctl.o tty_ldisc.o tty_buffer.o tty_port.o
 
+obj-m += chumby_timer.o
+#obj-m += chumby_bend.o
+
+
 obj-$(CONFIG_FM_SI4702)		+= mxc_si4702.o
 obj-$(CONFIG_MXC_IIM)		+= mxc_iim.o
 obj-$(CONFIG_IMX_SIM) 		+= imx_sim.o
@@ -107,6 +111,7 @@ obj-$(CONFIG_IPMI_HANDLER)	+= ipmi/
 obj-$(CONFIG_HANGCHECK_TIMER)	+= hangcheck-timer.o
 obj-$(CONFIG_TCG_TPM)		+= tpm/
 
+obj-$(CONFIG_DCC_TTY)		+= dcc_tty.o
 obj-$(CONFIG_PS3_FLASH)		+= ps3flash.o
 
 obj-$(CONFIG_JS_RTC)		+= js-rtc.o

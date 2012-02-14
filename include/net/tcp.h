@@ -1359,6 +1359,8 @@ extern void tcp_v4_destroy_sock(struct sock *sk);
 extern int tcp_v4_gso_send_check(struct sk_buff *skb);
 extern struct sk_buff *tcp_tso_segment(struct sk_buff *skb, int features);
 
+extern void tcp_v4_nuke_addr(__u32 saddr);
+
 #ifdef CONFIG_PROC_FS
 extern int  tcp4_proc_init(void);
 extern void tcp4_proc_exit(void);

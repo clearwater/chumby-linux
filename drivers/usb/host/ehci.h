@@ -565,6 +565,14 @@ struct ehci_fstn {
  * needed (mostly in root hub code).
  */
 
+/* Additions to the PORTSC registers */
+#define PORT_PSPD_FULL    (0<<26)
+#define PORT_PSPD_LOW (1<<26)
+#define PORT_PSPD_HIGH    (2<<26)
+#define PORT_PSPD_MASK    (3<<26)     /* port speed */
+#define PORT_PFSC (1<<24)     /* port force full-speed connect */
+
+
 #define	ehci_is_TDI(e)			(ehci_to_hcd(e)->has_tt)
 
 /* Returns the speed of a device attached to a port on the root hub. */
@@ -572,12 +580,12 @@ static inline unsigned int
 ehci_port_speed(struct ehci_hcd *ehci, unsigned int portsc)
 {
 	if (ehci_is_TDI(ehci)) {
-		switch ((portsc>>26)&3) {
-		case 0:
+		switch (portsc & PORT_PSPD_MASK) {
+		case PORT_PSPD_FULL:
 			return 0;
-		case 1:
+		case PORT_PSPD_LOW:
 			return (1<<USB_PORT_FEAT_LOWSPEED);
-		case 2:
+		case PORT_PSPD_HIGH:
 		default:
 			return (1<<USB_PORT_FEAT_HIGHSPEED);
 		}
@@ -585,11 +593,19 @@ ehci_port_speed(struct ehci_hcd *ehci, unsigned int portsc)
 	return (1<<USB_PORT_FEAT_HIGHSPEED);
 }
 
+/* Which bit controls whether a connection will be high-speed? */
+static inline u32 ehci_port_owner_bit(struct ehci_hcd *ehci)
+{
+	return ehci_is_TDI(ehci) ? PORT_PFSC : PORT_OWNER;
+}
+
+
 #else
 
 #define	ehci_is_TDI(e)			(0)
 
 #define	ehci_port_speed(ehci, portsc)	(1<<USB_PORT_FEAT_HIGHSPEED)
+#define	ehci_port_owner_bit(ehci)	PORT_OWNER
 #endif
 
 /*-------------------------------------------------------------------------*/

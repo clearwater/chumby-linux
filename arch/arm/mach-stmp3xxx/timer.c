@@ -64,7 +64,7 @@ static int
 stmp3xxx_timrot_set_next_event(unsigned long delta,
 		struct clock_event_device *dev)
 {
-	HW_TIMROT_TIMCOUNTn_WR(0, delta); /* reload */
+	HW_TIMROT_TIMCOUNTn_WR(0, delta+0); /* reload */
 	return 0;
 }
 
@@ -77,7 +77,7 @@ stmp3xxx_timrot_set_mode(enum clock_event_mode mode,
 static struct clock_event_device ckevt_timrot = {
 	.name		= "timrot",
 	.features	= CLOCK_EVT_FEAT_ONESHOT,
-	.shift		= 32,
+	.shift		= 30,
 	.cpumask	= CPU_MASK_CPU0,
 	.set_next_event	= stmp3xxx_timrot_set_next_event,
 	.set_mode	= stmp3xxx_timrot_set_mode,
@@ -108,10 +108,13 @@ static inline void __init stmp3xxx_time_init(unsigned long reload,
 {
 	cksrc_stmp3xxx.mult = clocksource_hz2mult(CLOCK_TICK_RATE,
 				cksrc_stmp3xxx.shift);
+
+
 	ckevt_timrot.mult = div_sc(CLOCK_TICK_RATE, NSEC_PER_SEC,
 				ckevt_timrot.shift);
 	ckevt_timrot.min_delta_ns = clockevent_delta2ns(2, &ckevt_timrot);
 	ckevt_timrot.max_delta_ns = clockevent_delta2ns(0xFFF, &ckevt_timrot);
+
 
 	HW_TIMROT_ROTCTRL_CLR(BM_TIMROT_ROTCTRL_SFTRST |
 				BM_TIMROT_ROTCTRL_CLKGATE);

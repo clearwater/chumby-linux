@@ -308,13 +308,15 @@ static ssize_t show_companion(struct device *dev,
 }
 
 /*
- * Sets the owner of a port
+ * Sets the connect-speed (i.e., owner) of a port
  */
-static void set_owner(struct ehci_hcd *ehci, int portnum, int new_owner)
+static void set_port_speed(struct ehci_hcd *ehci, int portnum, bool high_speed)
 {
 	u32 __iomem		*status_reg;
 	u32			port_status;
 	int 			try;
+	u32			owner_bit = ehci_port_owner_bit(ehci);
+	u32			new_owner = (high_speed ? 0 : owner_bit);
 
 	status_reg = &ehci->regs->port_status[portnum];
 
@@ -326,12 +328,17 @@ static void set_owner(struct ehci_hcd *ehci, int portnum, int new_owner)
 	for (try = 4; try > 0; --try) {
 		spin_lock_irq(&ehci->lock);
 		port_status = ehci_readl(ehci, status_reg);
-		if ((port_status & PORT_OWNER) == new_owner
-				|| (port_status & (PORT_OWNER | PORT_CONNECT))
-					== 0)
+		if ((port_status & owner_bit) == new_owner
+
+				/* If PORT_OWNER isn't set and the port is
+				 * disconnected then stop (we can't set
+				 * it unless a device is attached).
+				 */
+				|| ((port_status & (PORT_OWNER | PORT_CONNECT))
+					== 0 && !ehci_is_TDI(ehci))) {
 			try = 0;
-		else {
-			port_status ^= PORT_OWNER;
+		} else {
+			port_status ^= owner_bit;
 			port_status &= ~(PORT_PE | PORT_RWC_BITS);
 			ehci_writel(ehci, port_status, status_reg);
 		}
@@ -351,24 +358,24 @@ static ssize_t store_companion(struct device *dev,
 			       const char *buf, size_t count)
 {
 	struct ehci_hcd		*ehci;
-	int			portnum, new_owner;
+	int			portnum;
+	bool			high_speed = false;
 
 	ehci = hcd_to_ehci(bus_to_hcd(dev_get_drvdata(dev)));
-	new_owner = PORT_OWNER;		/* Owned by companion */
 	if (sscanf(buf, "%d", &portnum) != 1)
 		return -EINVAL;
 	if (portnum < 0) {
 		portnum = - portnum;
-		new_owner = 0;		/* Owned by EHCI */
+		high_speed = true;
 	}
 	if (portnum <= 0 || portnum > HCS_N_PORTS(ehci->hcs_params))
 		return -ENOENT;
 	portnum--;
-	if (new_owner)
-		set_bit(portnum, &ehci->companion_ports);
-	else
+	if (high_speed)
 		clear_bit(portnum, &ehci->companion_ports);
-	set_owner(ehci, portnum, new_owner);
+	else
+		set_bit(portnum, &ehci->companion_ports);
+	set_port_speed(ehci, portnum, high_speed);
 	return count;
 }
 static DEVICE_ATTR(companion, 0644, show_companion, store_companion);
@@ -377,18 +384,13 @@ static inline void create_companion_file(struct ehci_hcd *ehci)
 {
 	int	i;
 
-	/* with integrated TT there is no companion! */
-	if (!ehci_is_TDI(ehci))
-		i = device_create_file(ehci_to_hcd(ehci)->self.dev,
-				       &dev_attr_companion);
+	i = device_create_file(ehci_to_hcd(ehci)->self.dev,
+			&dev_attr_companion);
 }
 
 static inline void remove_companion_file(struct ehci_hcd *ehci)
 {
-	/* with integrated TT there is no companion! */
-	if (!ehci_is_TDI(ehci))
-		device_remove_file(ehci_to_hcd(ehci)->self.dev,
-				   &dev_attr_companion);
+	device_remove_file(ehci_to_hcd(ehci)->self.dev, &dev_attr_companion);
 }
 
 
@@ -419,7 +421,7 @@ static int check_reset_complete (
 
 		// what happens if HCS_N_CC(params) == 0 ?
 		port_status |= PORT_OWNER;
-		port_status &= ~PORT_RWC_BITS;
+		port_status &= ~(PORT_RWC_BITS | PORT_CONNECT);
 		ehci_writel(ehci, port_status, status_reg);
 
 	} else
@@ -768,11 +770,22 @@ static int ehci_hub_control (
 
 		/* transfer dedicated ports to the companion hc */
 		if ((temp & PORT_CONNECT) &&
-				test_bit(wIndex, &ehci->companion_ports)) {
+				test_bit(wIndex, &ehci->companion_ports) &&
+				!ehci_is_TDI(ehci)) {
 			temp &= ~PORT_RWC_BITS;
 			temp |= PORT_OWNER;
 			ehci_writel(ehci, temp, status_reg);
 			ehci_dbg(ehci, "port %d --> companion\n", wIndex + 1);
+			temp = ehci_readl(ehci, status_reg);
+		}
+
+		/* un-relinquish a disconnected port */
+		if (!(temp & PORT_CONNECT) &&
+				!test_bit(wIndex, &ehci->companion_ports) &&
+				ehci_is_TDI(ehci) &&
+				(temp & ehci_port_owner_bit(ehci))) {
+			temp &= ~(PORT_RWC_BITS | ehci_port_owner_bit(ehci));
+			ehci_writel(ehci, temp, status_reg);
 			temp = ehci_readl(ehci, status_reg);
 		}
 
@@ -914,9 +927,7 @@ static void ehci_relinquish_port(struct usb_hcd *hcd, int portnum)
 {
 	struct ehci_hcd		*ehci = hcd_to_ehci(hcd);
 
-	if (ehci_is_TDI(ehci))
-		return;
-	set_owner(ehci, --portnum, PORT_OWNER);
+    set_port_speed(ehci, --portnum, false);
 }
 
 static int ehci_port_handed_over(struct usb_hcd *hcd, int portnum)

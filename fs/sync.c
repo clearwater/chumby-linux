@@ -104,6 +104,7 @@ long do_fsync(struct file *file, int datasync)
 out:
 	return ret;
 }
+EXPORT_SYMBOL_GPL(do_fsync);
 
 static long __do_fsync(unsigned int fd, int datasync)
 {

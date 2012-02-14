@@ -27,8 +27,46 @@
 #include <mach/lradc.h>
 #include <mach/hardware.h>
 #include <mach/regs-lradc.h>
+#include <mach/cpu.h>
 
 #define TOUCH_DEBOUNCE_TOLERANCE	100
+
+
+
+// Boards after revision 6 had their Y axis flipped.
+static int should_flip_y_axis(void)
+{
+	return chumby_revision() > 6;
+}
+
+
+static int scaled_touchscreen = 0;
+#define X_MIN 3930
+#define X_MAX 125
+#define Y_MIN 130
+#define Y_MAX 4000
+#define SCREEN_W 320
+#define SCREEN_H 240
+static inline int axis_to_screen(int raw, int scale, int min, int max) {
+    int flip = 0;
+    if(min > max) {
+        int tmp;
+        tmp  = max;
+        max  = min;
+        min  = tmp;
+        flip = 1;
+    }
+
+    raw -= min;
+    raw = raw / (max / scale);
+
+    if(!flip)
+        raw = scale - raw;
+
+    return raw;
+}
+
+
 
 struct stmp3xxx_ts_info {
 	int touch_irq;
@@ -173,12 +211,32 @@ static void process_lradc(struct stmp3xxx_ts_info *info, u16 x, u16 y,
 		break;
 
 	case TS_STATE_TOUCH_VERIFY:
+		{
+			int temp;
+			temp = info->y;
+			info->y = info->x;
+			info->x = temp;
+		}
+
 		pr_debug("%s: touch verify state, sample_count %d\n", __func__,
 				info->sample_count);
 		pr_debug("%s: x %d, y %d\n", __func__, info->x, info->y);
-		input_report_abs(info->idev, ABS_X, info->x);
-		input_report_abs(info->idev, ABS_Y, info->y);
+
+
+		if(should_flip_y_axis())
+			info->y = 4096-info->y;
+        if(scaled_touchscreen) {
+            input_report_abs(info->idev, ABS_X,
+                    axis_to_screen(info->x, SCREEN_W, X_MIN, X_MAX));
+            input_report_abs(info->idev, ABS_Y,
+                    axis_to_screen(info->y, SCREEN_H, Y_MIN, Y_MAX));
+        }
+        else {
+            input_report_abs(info->idev, ABS_X, info->x);
+            input_report_abs(info->idev, ABS_Y, info->y);
+        }
 		input_report_abs(info->idev, ABS_PRESSURE, pressure);
+        input_report_key(info->idev, BTN_TOUCH, pressure);
 		input_sync(info->idev);
 		/* fall through */
 	case TS_STATE_TOUCH_DETECT:
@@ -241,9 +299,20 @@ static int stmp3xxx_ts_probe(struct platform_device *pdev)
 	}
 
 	idev->name = "STMP3XXX touchscreen";
-	idev->evbit[0] = BIT(EV_ABS);
-	input_set_abs_params(idev, ABS_X, 0, 0xFFF, 0, 0);
-	input_set_abs_params(idev, ABS_Y, 0, 0xFFF, 0, 0);
+	idev->phys = "stmp3xxx_ts/input0";
+	idev->id.bustype = BUS_ISA;
+	idev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_ABS);
+	idev->keybit[BIT_WORD(BTN_TOUCH)] = BIT_MASK(BTN_TOUCH);
+
+
+    if(scaled_touchscreen) {
+        input_set_abs_params(idev, ABS_X, 0, SCREEN_W, 0, 0);
+        input_set_abs_params(idev, ABS_Y, 0, SCREEN_H, 0, 0);
+    }
+    else {
+        input_set_abs_params(idev, ABS_X, 0, 0xFFF, 0, 0);
+        input_set_abs_params(idev, ABS_Y, 0, 0xFFF, 0, 0);
+    }
 	input_set_abs_params(idev, ABS_PRESSURE, 0, 1, 0, 0);
 
 	ret = input_register_device(idev);
@@ -295,7 +364,6 @@ static int stmp3xxx_ts_probe(struct platform_device *pdev)
 
 	hw_lradc_set_delay_trigger(LRADC_DELAY_TRIGGER_TOUCHSCREEN,
 			0x3c, 0, 0, 8);
-
 	HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_LRADC5_IRQ);
 	HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_TOUCH_DETECT_IRQ);
 
@@ -369,6 +437,7 @@ static struct platform_driver stmp3xxx_ts_driver = {
 	.resume		= stmp3xxx_ts_resume,
 	.driver		= {
 		.name		= "stmp3xxx_ts",
+		.owner		= THIS_MODULE,
 	},
 };
 
@@ -384,3 +453,8 @@ static void __exit stmp3xxx_ts_exit(void)
 
 module_init(stmp3xxx_ts_init);
 module_exit(stmp3xxx_ts_exit);
+module_param(scaled_touchscreen, bool, 0644);
+MODULE_PARM_DESC(scaled_touchscreen, "true if the touchscreen should report pre-scaled values");
+MODULE_LICENSE("GPL v2");
+MODULE_SUPPORTED_DEVICE("input/ts");
+MODULE_ALIAS("platform:stmp3xxx_ts");

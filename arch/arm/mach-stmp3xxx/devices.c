@@ -147,19 +147,19 @@ struct platform_device stmp3xxx_touchscreen = {
 /*
  * Keypad device
  */
-static struct resource keyboard_resource[] = {
+static struct resource bend_resource[] = {
 	{
 		.flags	= IORESOURCE_IRQ,
-		.start	= IRQ_LRADC_CH0,
-		.end	= IRQ_LRADC_CH0,
+		.start	= IRQ_GPIO1,
+		.end	= IRQ_GPIO1,
 	},
 };
 
-struct platform_device stmp3xxx_keyboard = {
-	.name		= "stmp3xxx-keyboard",
+struct platform_device bend_sensor = {
+	.name		= "bend-sensor",
 	.id		= -1,
-	.num_resources	= ARRAY_SIZE(keyboard_resource),
-	.resource	= keyboard_resource,
+	.num_resources	= ARRAY_SIZE(bend_resource),
+	.resource	= bend_resource,
 };
 
 static struct resource gpmi_resources[] = {
@@ -329,6 +329,11 @@ static struct resource fb_resource[] = {
 		.start	= IRQ_LCDIF_ERROR,
 		.end	= IRQ_LCDIF_ERROR,
 	},
+    {
+        .flags  = IORESOURCE_IRQ,
+        .start  = IRQ_PXP,
+        .end    = IRQ_PXP,
+    },
 };
 
 static struct stmp3xxx_platform_fb_data stmp3xxx_framebuffer_pdata = {
@@ -348,6 +353,7 @@ struct platform_device stmp3xxx_framebuffer = {
 };
 
 /* PxP */
+/*
 static struct resource pxp_resource[] = {
 	{
 		.flags	= IORESOURCE_MEM,
@@ -371,6 +377,7 @@ struct platform_device stmp3xxx_pxp = {
 	.num_resources	= ARRAY_SIZE(pxp_resource),
 	.resource	= pxp_resource,
 };
+*/
 
 /* SSP 1&2 */
 
@@ -597,6 +604,7 @@ static struct resource battery_resource[] = {
 	},
 };
 
+#if 0
 static ddi_bc_Cfg_t battery_data = {
 	.u32StateMachinePeriod		 = 100,		/* ms */
 	.u16CurrentRampSlope		 = 75,		/* mA/s */
@@ -622,6 +630,34 @@ static ddi_bc_Cfg_t battery_data = {
 	.u16BatteryTempLow		 = 497,		/* Unknown units */
 	.u16BatteryTempSafeCurrent	 = 0,		/* mA */
 };
+#endif
+
+static ddi_bc_Cfg_t battery_data = {
+    .u32StateMachinePeriod       = 100,     /* ms */
+    .u16CurrentRampSlope         = 75,      /* mA/s */
+    .u16ConditioningThresholdVoltage = 2900,    /* mV */
+    .u16ConditioningMaxVoltage   = 3000,    /* mV */
+    .u16ConditioningCurrent      = 60,      /* mA */
+    .u32ConditioningTimeout      = 4*60*60*1000, /* ms (4 hours) */
+    .u16ChargingVoltage      = 4200,    /* mV */
+    /* FIXME: the current comparator could have h/w bugs in current
+     * detection through POWER_STS.CHRGSTS bit */
+    .u16ChargingCurrent      = 600,     /* mA 600 */
+    .u16ChargingThresholdCurrent     = 60,      /* mA 60 */
+    .u32ChargingTimeout      = 20*60*60*400,/* ms (4 hours) */
+    .u32TopOffPeriod         = 30*60*1000,  /* ms (30 minutes) */
+    .useInternalBias         = 1,       /* internal bias current */
+    .monitorDieTemp          = 1,       /* Monitor the die */
+    .u8DieTempHigh           = 90,     /* deg centigrade */
+    .u8DieTempLow            = 85,      /* deg centigrade */
+    .u16DieTempSafeCurrent       = 0,      /* mA */
+    .monitorBatteryTemp      = 1,       /* Monitor the battery*/
+    .u8BatteryTempChannel        = 1,       /* LRADC 1 */
+    .u16BatteryTempHigh      = 650,     /* Unknown units */
+    .u16BatteryTempLow       = 750,     /* Unknown units */
+    .u16BatteryTempSafeCurrent   = 0,       /* mA */
+};
+
 
 struct platform_device stmp3xxx_battery = {
 	.name   = "stmp3xxx-battery",

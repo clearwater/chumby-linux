@@ -57,26 +57,31 @@
 
 #define GAIN_CORRECTION 1012    // 1.012
 
-/* NOTE: the below define is different for 37xx and 378x */
+#define VBUSVALID_THRESH_2_90V		0x0
+#define VBUSVALID_THRESH_4_00V		0x1
+#define VBUSVALID_THRESH_4_10V		0x2
+#define VBUSVALID_THRESH_4_20V		0x3
 #define VBUSVALID_THRESH_4_30V		0x4
+#define VBUSVALID_THRESH_4_40V		0x5
+#define VBUSVALID_THRESH_4_50V		0x6
+#define VBUSVALID_THRESH_4_60V		0x7
+
 #define LINREG_OFFSET_STEP_BELOW	0x2
 #define BP_POWER_BATTMONITOR_BATT_VAL	16
 #define BP_POWER_CHARGE_BATTCHRG_I	0
 #define BP_POWER_CHARGE_STOP_ILIMIT	8
 
+#define VDD4P2_ENABLED
+
 ////////////////////////////////////////////////////////////////////////////////
 // Globals & Variables
 ////////////////////////////////////////////////////////////////////////////////
 
-// FIXME
-/* We cant use VBUSVALID signal for VDD5V detection, since setting in
- * USB driver POWER_DEBUG.VBUSVALIDPIOLOCK bit locks the POWER_STS.VBUSVALID to
- * active state for all power states (even if the 5v went away). The
- * POWER_CTRL.VBUSVALID_IRQ is also affected and it's impossible to get
- * valid information about 5v presence.
- */
-static ddi_power_5vDetection_t DetectionMethod = DDI_POWER_5V_VDD5V_GT_VDDIO;
-//static ddi_power_5vDetection_t DetectionMethod = DDI_POWER_5V_VBUSVALID;
+
+/* Select your 5V Detection method */
+ static ddi_power_5vDetection_t DetectionMethod =
+			DDI_POWER_5V_VDD5V_GT_VDDIO;
+/* static ddi_power_5vDetection_t DetectionMethod = DDI_POWER_5V_VBUSVALID; */
 
 ////////////////////////////////////////////////////////////////////////////////
 // Code
@@ -140,15 +145,10 @@ void ddi_power_Enable5vDetection(void)
 	// Disable hardware power down when 5V is inserted or removed
 	HW_POWER_5VCTRL_CLR(BM_POWER_5VCTRL_PWDN_5VBRNOUT);
 
-	/*
-	 * Prepare the hardware for the detection method.  We used to set
-	 * and clear the VBUSVALID_5VDETECT bit, but that is also used for
-	 * the DCDC 5V detection.  It is sufficient to just check the status
-	 * bits to see if 5V is present.
-	 *
-	 * Use VBUSVALID for DCDC 5V detection.  The DCDC's detection is
-	 * different than the USB/5V detection used to switch profiles.  This
-	 * is used to determine when a handoff should occur.
+	/* Enabling VBUSVALID hardware detection even if VDD5V_GT_VDDIO
+	 * is the detection method being used for 5V status (hardware
+	 * or software).  This is in case any other drivers (such as
+	 * USB) are specifically monitoring VBUSVALID status
 	 */
 	HW_POWER_5VCTRL_SET(BM_POWER_5VCTRL_VBUSVALID_5VDETECT);
 
@@ -165,11 +165,21 @@ void ddi_power_Enable5vDetection(void)
 		BF_POWER_VDDDCTRL_LINREG_OFFSET(LINREG_OFFSET_STEP_BELOW));
 
 	/* Clear vbusvalid interrupt flag */
-//	HW_POWER_CTRL_CLR(BM_POWER_CTRL_VBUSVALID_IRQ);
+	HW_POWER_CTRL_CLR(BM_POWER_CTRL_VBUSVALID_IRQ);
 	HW_POWER_CTRL_CLR(BM_POWER_CTRL_VDD5V_GT_VDDIO_IRQ);
-	/* enable vbusvalid irq */
-//	HW_POWER_CTRL_SET(BM_POWER_CTRL_ENIRQ_VBUS_VALID);
-	HW_POWER_CTRL_SET(BM_POWER_CTRL_ENIRQ_VDD5V_GT_VDDIO);
+
+
+	/* enable 5V Detection interrupt vbusvalid irq */
+	switch (DetectionMethod) {
+	case DDI_POWER_5V_VBUSVALID:
+		/* Check VBUSVALID for 5V present */
+		HW_POWER_CTRL_SET(BM_POWER_CTRL_ENIRQ_VBUS_VALID);
+		break;
+	case DDI_POWER_5V_VDD5V_GT_VDDIO:
+		/* Check VDD5V_GT_VDDIO for 5V present */
+		HW_POWER_CTRL_SET(BM_POWER_CTRL_ENIRQ_VDD5V_GT_VDDIO);
+		break;
+	}
 }
 
 /*
@@ -180,15 +190,17 @@ void ddi_power_Enable5vDetection(void)
 void ddi_power_enable_5v_to_battery_handoff(void)
 {
 	/* Clear vbusvalid interrupt flag */
-//	HW_POWER_CTRL_CLR(BM_POWER_CTRL_VBUSVALID_IRQ);
+	HW_POWER_CTRL_CLR(BM_POWER_CTRL_VBUSVALID_IRQ);
 	HW_POWER_CTRL_CLR(BM_POWER_CTRL_VDD5V_GT_VDDIO_IRQ);
 
 	/* detect 5v unplug */
-//	HW_POWER_CTRL_CLR(BM_POWER_CTRL_POLARITY_VBUSVALID);
+	HW_POWER_CTRL_CLR(BM_POWER_CTRL_POLARITY_VBUSVALID);
 	HW_POWER_CTRL_CLR(BM_POWER_CTRL_POLARITY_VDD5V_GT_VDDIO);
 
+#ifndef VDD4P2_ENABLED
 	// Enable automatic transition to DCDC
 	HW_POWER_5VCTRL_SET(BM_POWER_5VCTRL_DCDC_XFER);
+#endif
 }
 
 /*
@@ -198,6 +210,16 @@ void ddi_power_enable_5v_to_battery_handoff(void)
  */
 void ddi_power_execute_5v_to_battery_handoff(void)
 {
+
+    // Always source current off 4P2.
+    HW_POWER_5VCTRL_SET(BF_POWER_5VCTRL_CHARGE_4P2_ILIMIT(0x3f));
+
+#ifdef VDD4P2_ENABLED
+
+	HW_POWER_DCDC4P2_CLR(BM_POWER_DCDC4P2_ENABLE_DCDC |
+			BM_POWER_DCDC4P2_ENABLE_4P2);
+	HW_POWER_5VCTRL_SET(BM_POWER_5VCTRL_PWD_CHARGE_4P2);
+#else
 	// VDDD has different configurations depending on the battery type
 	// and battery level.
 
@@ -230,6 +252,7 @@ void ddi_power_execute_5v_to_battery_handoff(void)
 	HW_POWER_5VCTRL_CLR(BM_POWER_5VCTRL_ILIMIT_EQ_ZERO);
 	// Make sure stepping is enabled when using DCDC.
 	HW_POWER_VDDIOCTRL_CLR(BM_POWER_VDDIOCTRL_DISABLE_STEPPING);
+#endif
 }
 
 /*
@@ -242,26 +265,97 @@ void ddi_power_execute_5v_to_battery_handoff(void)
 void ddi_power_enable_battery_to_5v_handoff(void)
 {
 	/* Clear vbusvalid interrupt flag */
-//	HW_POWER_CTRL_CLR(BM_POWER_CTRL_VBUSVALID_IRQ);
+	HW_POWER_CTRL_CLR(BM_POWER_CTRL_VBUSVALID_IRQ);
 	HW_POWER_CTRL_CLR(BM_POWER_CTRL_VDD5V_GT_VDDIO_IRQ);
 
 	/* detect 5v plug-in */
-//	HW_POWER_CTRL_SET(BM_POWER_CTRL_POLARITY_VBUSVALID);
+	HW_POWER_CTRL_SET(BM_POWER_CTRL_POLARITY_VBUSVALID);
 	HW_POWER_CTRL_SET(BM_POWER_CTRL_POLARITY_VDD5V_GT_VDDIO);
 
+#ifndef VDD4P2_ENABLED
 	// Force current from 5V to be zero by disabling its entry source.
 	HW_POWER_5VCTRL_SET(BM_POWER_5VCTRL_ILIMIT_EQ_ZERO);
-
+#endif
 	// Allow DCDC be to active when 5V is present.
 	HW_POWER_5VCTRL_SET(BM_POWER_5VCTRL_ENABLE_DCDC);
 }
 
-/* This function handles the transitions on each of the power rails necessary
- * to power the chip from the 5V power supply when it was previously powered
- * from the battery power supply.
+/* This function handles the transitions on each of theVDD5V_GT_VDDIO power
+ * rails necessary to power the chip from the 5V power supply when it was
+ * previously powered from the battery power supply.
  */
 void ddi_power_execute_battery_to_5v_handoff(void)
 {
+
+    // Source all current off 5V, or at least as much as we can (a total of
+    // 780 mA).
+    HW_POWER_5VCTRL_SET(BF_POWER_5VCTRL_CHARGE_4P2_ILIMIT(0x3f));
+
+#ifdef VDD4P2_ENABLED
+
+	bool orig_vbusvalid_5vdetect = false;
+	bool orig_pwd_bo = false;
+	uint8_t orig_vbusvalid_threshold;
+
+
+	/* recording orignal values that will be modified
+	* temporarlily to handle a chip bug.  See chip errata
+	* for CQ ENGR00115837
+	*/
+	orig_vbusvalid_threshold =
+		(__raw_readl(HW_POWER_5VCTRL_ADDR)
+		& BM_POWER_5VCTRL_VBUSVALID_TRSH)
+		>> BP_POWER_5VCTRL_VBUSVALID_TRSH;
+
+	if (__raw_readl(HW_POWER_5VCTRL_ADDR) &
+		BM_POWER_5VCTRL_VBUSVALID_5VDETECT)
+			orig_vbusvalid_5vdetect = true;
+
+	if (__raw_readl(HW_POWER_MINPWR_ADDR) &
+		BM_POWER_MINPWR_PWD_BO)
+			orig_pwd_bo = true;
+
+	/* disable mechanisms that get erroneously tripped by
+	* when setting the DCDC4P2 EN_DCDC
+	*/
+	HW_POWER_5VCTRL_CLR(BM_POWER_5VCTRL_VBUSVALID_5VDETECT);
+	HW_POWER_5VCTRL_CLR(BF_POWER_5VCTRL_VBUSVALID_TRSH(0x7));
+	HW_POWER_5VCTRL_SET(BM_POWER_MINPWR_PWD_BO);
+
+	HW_POWER_DCDC4P2_SET(BM_POWER_DCDC4P2_ENABLE_4P2);
+
+
+	/* as a todo, we'll want to ramp up the charge current first
+	 * to minimize disturbances on the VDD5V rail
+	 */
+	ddi_power_SetChargerPowered(1);
+
+	/* Until the previous todo is completed, we'll want to give a delay
+	 * to allow the charging up of the 4p2 capacitor.
+	 */
+	udelay(10);
+
+
+	HW_POWER_DCDC4P2_SET(BM_POWER_DCDC4P2_ENABLE_DCDC);
+
+	udelay(20);
+	/* coming from a known value of 0 so this is ok */
+	HW_POWER_5VCTRL_SET(BF_POWER_5VCTRL_VBUSVALID_TRSH(
+			orig_vbusvalid_threshold));
+
+	if (orig_vbusvalid_5vdetect)
+		HW_POWER_5VCTRL_SET(BM_POWER_5VCTRL_VBUSVALID_5VDETECT);
+
+
+	if (!orig_pwd_bo)
+		HW_POWER_5VCTRL_CLR(BM_POWER_MINPWR_PWD_BO);
+
+
+
+
+
+#else
+
 	// Disable the DCDC during 5V connections.
 	HW_POWER_5VCTRL_CLR(BM_POWER_5VCTRL_ENABLE_DCDC);
 
@@ -298,24 +392,14 @@ void ddi_power_execute_battery_to_5v_handoff(void)
 	HW_POWER_5VCTRL_CLR(BM_POWER_5VCTRL_ILIMIT_EQ_ZERO);
 	// Make sure stepping is disabled when using DCDC.
 	HW_POWER_VDDIOCTRL_SET(BM_POWER_VDDIOCTRL_DISABLE_STEPPING);
+#endif
 }
 
 void ddi_power_init_handoff(void)
 {
-	/*
-	 * The following settings give optimal power supply capability and
-	 * efficiency.  Extreme loads will need HALF_FETS cleared and
-	 * possibly DOUBLE_FETS set.  The below setting are probably also
-	 * the best for alkaline mode also but more characterization is
-	 * needed to know for sure.
-	 */
-	// Increase the RCSCALE_THRESHOLD
-	HW_POWER_LOOPCTRL_SET(BM_POWER_LOOPCTRL_RCSCALE_THRESH);
-	// Increase the RCSCALE level for quick DCDC response to dynamic load
-	HW_POWER_LOOPCTRL_SET(BF_POWER_LOOPCTRL_EN_RCSCALE(3)); // 8x
+	/* The following settings give optimal power supply capability */
 
-	// Enable half fets for increase efficiency.
-	HW_POWER_MINPWR_SET(BM_POWER_MINPWR_HALF_FETS);
+
 
 	// enable 5v presence detection
 	ddi_power_Enable5vDetection();
@@ -356,8 +440,21 @@ int ddi_power_init_battery(void)
 
 	HW_POWER_CHARGE_SET(BM_POWER_CHARGE_ENABLE_FAULT_DETECT);
 
+    // Always source current off the 4P2.
+    HW_POWER_5VCTRL_SET(BF_POWER_5VCTRL_CHARGE_4P2_ILIMIT(0x3f));
+
+    // Disable the 100-ohm load, as ostensibly we're running off the DCDC
+    // entirely now.
+	HW_POWER_CHARGE_CLR(BM_POWER_CHARGE_ENABLE_LOAD);
+
 	// kick off the trigger
 	hw_lradc_set_delay_trigger_kick(LRADC_DELAY_TRIGGER_BATTERY, 1);
+
+	HW_POWER_LOOPCTRL_SET(BM_POWER_LOOPCTRL_RCSCALE_THRESH);
+	HW_POWER_LOOPCTRL_SET(BF_POWER_LOOPCTRL_EN_RCSCALE(3));
+ 
+	HW_POWER_MINPWR_CLR(BM_POWER_MINPWR_HALF_FETS);
+	HW_POWER_MINPWR_SET(BM_POWER_MINPWR_DOUBLE_FETS);
 
 	/* prepare handoff */
 	ddi_power_init_handoff();
@@ -366,66 +463,61 @@ int ddi_power_init_battery(void)
 }
 
 /*
- * Use the the lradc7 channel dedicated for battery voltage measurement to
+ * Use the the lradc0 channel dedicated for battery voltage measurement to
  * get the die temperature from on-chip sensor.
  */
+#warning This uses a hardcoded channel value of 0, not u8BatteryTempChannel
 uint16_t MeasureInternalDieTemperature(void)
 {
 	uint32_t  ch8Value, ch9Value;
 
-	/* power up internal tep sensor block */
+	/* power up internal temp sensor block */
 	HW_LRADC_CTRL2_CLR(BM_LRADC_CTRL2_TEMPSENSE_PWD);
 
-	/* mux to the lradc 8th temp channel */
-	HW_LRADC_CTRL4_CLR(BF_LRADC_CTRL4_LRADC7SELECT(0xF));
-	HW_LRADC_CTRL4_SET(BF_LRADC_CTRL4_LRADC7SELECT(8));
+	/* Mux channel 0 to use LRADC8 */
+	HW_LRADC_CTRL4_CLR(BF_LRADC_CTRL4_LRADC0SELECT(0xF));
+	HW_LRADC_CTRL4_SET(BF_LRADC_CTRL4_LRADC0SELECT(8));
 
 	/* Clear the interrupt flag */
-	HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_LRADC7_IRQ);
-	HW_LRADC_CTRL0_SET(BF_LRADC_CTRL0_SCHEDULE(1 << BATTERY_VOLTAGE_CH));
-	// Wait for conversion complete
-        while (!(HW_LRADC_CTRL1_RD() & BM_LRADC_CTRL1_LRADC7_IRQ))
-                cpu_relax();
+	HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_LRADC0_IRQ);
+	HW_LRADC_CTRL0_SET(BF_LRADC_CTRL0_SCHEDULE(1 << LRADC_CH0));
+
+	/* Wait for conversion to complete */
+    while (!(HW_LRADC_CTRL1_RD() & BM_LRADC_CTRL1_LRADC0_IRQ))
+        cpu_relax();
+
 	/* Clear the interrupt flag again */
-	HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_LRADC7_IRQ);
-	// read temperature value and clr lradc
-	ch8Value = HW_LRADC_CHn_RD(BATTERY_VOLTAGE_CH) & BM_LRADC_CHn_VALUE;
-	HW_LRADC_CHn_CLR(BATTERY_VOLTAGE_CH, BM_LRADC_CHn_VALUE);
+	HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_LRADC0_IRQ);
+
+	/* read temperature value and clr lradc */
+	ch8Value = HW_LRADC_CHn_RD(LRADC_CH0) & BM_LRADC_CHn_VALUE;
+	HW_LRADC_CHn_CLR(LRADC_CH0, BM_LRADC_CHn_VALUE);
 
 	/* mux to the lradc 9th temp channel */
-	HW_LRADC_CTRL4_CLR(BF_LRADC_CTRL4_LRADC7SELECT(0xF));
-	HW_LRADC_CTRL4_SET(BF_LRADC_CTRL4_LRADC7SELECT(9));
+	HW_LRADC_CTRL4_CLR(BF_LRADC_CTRL4_LRADC0SELECT(0xF));
+	HW_LRADC_CTRL4_SET(BF_LRADC_CTRL4_LRADC0SELECT(9));
 
 	/* Clear the interrupt flag */
-	HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_LRADC7_IRQ);
-	HW_LRADC_CTRL0_SET(BF_LRADC_CTRL0_SCHEDULE(1 << BATTERY_VOLTAGE_CH));
-	// Wait for conversion complete
-        while (!(HW_LRADC_CTRL1_RD() & BM_LRADC_CTRL1_LRADC7_IRQ))
-                cpu_relax();
+	HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_LRADC0_IRQ);
+	HW_LRADC_CTRL0_SET(BF_LRADC_CTRL0_SCHEDULE(1 << LRADC_CH0));
+
+	/* Wait for conversion complete */
+    while (!(HW_LRADC_CTRL1_RD() & BM_LRADC_CTRL1_LRADC0_IRQ))
+        cpu_relax();
+
 	/* Clear the interrupt flag */
-	HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_LRADC7_IRQ);
-	// read temperature value
-	ch9Value = HW_LRADC_CHn_RD(BATTERY_VOLTAGE_CH) & BM_LRADC_CHn_VALUE;
-	HW_LRADC_CHn_CLR(BATTERY_VOLTAGE_CH, BM_LRADC_CHn_VALUE);
+	HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_LRADC0_IRQ);
+
+	/* read temperature value */
+	ch9Value = HW_LRADC_CHn_RD(LRADC_CH0) & BM_LRADC_CHn_VALUE;
+	HW_LRADC_CHn_CLR(LRADC_CH0, BM_LRADC_CHn_VALUE);
 
 	/* power down temp sensor block */
 	HW_LRADC_CTRL2_SET(BM_LRADC_CTRL2_TEMPSENSE_PWD);
 
-	/* mux back to the lradc 7th battery voltage channel */
-	HW_LRADC_CTRL4_CLR(BF_LRADC_CTRL4_LRADC7SELECT(0xF));
-	HW_LRADC_CTRL4_SET(BF_LRADC_CTRL4_LRADC7SELECT(7));
-
-	/* Clear the interrupt flag */
-	HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_LRADC7_IRQ);
-	HW_LRADC_CTRL0_SET(BF_LRADC_CTRL0_SCHEDULE(1 << BATTERY_VOLTAGE_CH));
-	// Wait for conversion complete
-        while (!(HW_LRADC_CTRL1_RD() & BM_LRADC_CTRL1_LRADC7_IRQ))
-                cpu_relax();
-	/* Clear the interrupt flag */
-	HW_LRADC_CTRL1_CLR(BM_LRADC_CTRL1_LRADC7_IRQ);
-
 	return (uint16_t)((ch9Value-ch8Value)*GAIN_CORRECTION/4000);
 }
+
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -497,7 +589,9 @@ void ddi_power_SetChargerPowered(bool bPowerOn)
 		HW_POWER_5VCTRL_CLR(BM_POWER_5VCTRL_PWD_CHARGE_4P2);
 	} else {
 		HW_POWER_CHARGE_SET(BM_POWER_CHARGE_PWD_BATTCHRG);
+#ifndef VDD4P2_ENABLED
 		HW_POWER_5VCTRL_SET(BM_POWER_5VCTRL_PWD_CHARGE_4P2);
+#endif
 	}
 
 //#ifdef CONFIG_POWER_SUPPLY_DEBUG

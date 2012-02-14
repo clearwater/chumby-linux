@@ -3,7 +3,7 @@
  *
  * Author: Vladislav Buzov <vbuzov@embeddedalley.com>
  *
- * Copyright 2008-2009 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright 2008 Freescale Semiconductor, Inc. All Rights Reserved.
  * Copyright 2008 Embedded Alley Solutions, Inc All Rights Reserved.
  */
 
@@ -38,14 +38,27 @@
 #include <mach/regs-audioout.h>
 #include <mach/regs-rtc.h>
 
+#include <mach/cpu.h>
+
 #include "stmp378x_codec.h"
 
 #define BV_AUDIOIN_ADCVOL_SELECT__MIC 0x00	/* missing define */
 
+#if 0
+#define CHLOG(format, arg...)            \
+        printk("stmp378x_codec.c - %s():%d - " format, __func__, __LINE__, ## arg)
+#else
+#define CHLOG(format, arg...)
+#endif
+
+
 #define STMP378X_VERSION	"0.1"
+int stmp3xxx_speaker_muted, stmp3xxx_headphone_muted;
+int stmp3xxx_playback_streams;
 struct stmp378x_codec_priv {
+    int            speaker_muted;
 	struct device *dev;
-	struct clk *clk;
+	struct clk    *clk;
 };
 
 /*
@@ -100,6 +113,36 @@ static int stmp378x_codec_write(struct snd_soc_codec *codec,
 		value <<= 16;
 	}
 
+    // Special case for SPEAKERCTRL_MUTE:
+    // The speaker amplifier does a funny thing if the DAC is not engaged.
+    // Namely, it ends up driving about 300mA of current to the speaker
+    // from an unknown source.  Therefore, we want to trap writes to this
+    // register if playback is not occurring, and write them out later.
+    if((adc_regmap[reg>>1]&0xffff) == 0x8100 && reg&0x1) {
+        // Copy over the "muted" value, which will get saved regardless of
+        // whether we're playing, so it can be used again once we start
+        // playing.
+        stmp3xxx_speaker_muted = !!(value&0x01000000);
+
+        // If we're not playing back audio, ensure the "speaker_muted" bit
+        // stays set.
+        if(!stmp3xxx_playback_streams)
+            value|=0x01000000;
+    }
+
+    if((adc_regmap[reg>>1]&0xffff) == 0x8050 && reg&0x1) {
+        // Copy over the "muted" value, which will get saved regardless of
+        // whether we're playing, so it can be used again once we start
+        // playing.
+        stmp3xxx_headphone_muted = !!(value&0x01000000);
+
+        // If we're not playing back audio, ensure the "speaker_muted" bit
+        // stays set.
+        if(!stmp3xxx_playback_streams)
+            value|=0x01000000;
+    }
+
+    // We actually do the same for HPVOL_MUTE as well.
 	reg_val = __raw_readl(adc_regmap[reg >> 1]);
 	reg_val = (reg_val & ~mask) | value;
 	__raw_writel(reg_val, adc_regmap[reg >> 1]);
@@ -118,6 +161,21 @@ static unsigned int stmp378x_codec_read(struct snd_soc_codec *codec,
 	reg_val = __raw_readl(adc_regmap[reg >> 1]);
 	if (reg & 1)
 		reg_val >>= 16;
+
+    // XXX should we lie here and report the value of stmp3xxx_speaker_muted
+    // rather than what's in the real register?
+    if((adc_regmap[reg>>1]&0xffff) == 0x8100 && reg&0x1) {
+        if(stmp3xxx_speaker_muted)
+            reg_val |= 0x0100;
+        else
+            reg_val &= 0xfeff;
+    }
+    if((adc_regmap[reg>>1]&0xffff) == 0x8050 && reg&0x1) {
+        if(stmp3xxx_headphone_muted)
+            reg_val |= 0x0100;
+        else
+            reg_val &= 0xfeff;
+    }
 
 	return reg_val & 0xffff;
 }
@@ -141,8 +199,6 @@ static const struct soc_enum stmp378x_codec_enum[] = {
 /* Codec controls */
 static const struct snd_kcontrol_new stmp378x_snd_controls[] = {
 	/* Playback Volume */
-	SOC_DOUBLE_R("DAC Playback Volume",
-			DAC_VOLUME_H, DAC_VOLUME_L, 0, 0xFF, 0),
 	SOC_DOUBLE_R("DAC Playback Switch",
 			DAC_VOLUME_H, DAC_VOLUME_L, 8, 0x01, 1),
 	SOC_DOUBLE("HP Playback Volume", DAC_HPVOL_L, 8, 0, 0x7F, 1),
@@ -160,6 +216,13 @@ static const struct snd_kcontrol_new stmp378x_snd_controls[] = {
 	SOC_ENUM("3D effect", stmp378x_codec_enum[3]),
 };
 
+static const struct snd_kcontrol_new stmp378x_dac_controls[] = {
+	SOC_DOUBLE_R("DAC Playback Volume",
+			DAC_VOLUME_H, DAC_VOLUME_L, 0, 255, 0),
+	SOC_DOUBLE_R("DAC Playback Volume",
+			DAC_VOLUME_H, DAC_VOLUME_L, 0, 244, 0),
+};
+
 /* add non dapm controls */
 static int stmp378x_codec_add_controls(struct snd_soc_codec *codec)
 {
@@ -172,6 +235,22 @@ static int stmp378x_codec_add_controls(struct snd_soc_codec *codec)
 	       if (err < 0)
 		       return err;
 	}
+
+	/* Depending on hardware version, add DAC controls */
+	if(chumby_revision() == 7) {
+		/* HW 10.7 limits the volume to 244 */
+		err = snd_ctl_add(codec->card,
+				  snd_soc_cnew(&stmp378x_dac_controls[1],
+				  codec, NULL));
+	}
+	else {
+		/* Other revisions have unlimited volume */
+		err = snd_ctl_add(codec->card,
+				  snd_soc_cnew(&stmp378x_dac_controls[0],
+				  codec, NULL));
+	}
+	if (err < 0)
+		return err;
 
 	return 0;
 }
@@ -213,7 +292,7 @@ static const struct snd_soc_dapm_widget stmp378x_codec_widgets[] = {
 	SND_SOC_DAPM_OUTPUT("HPL"),
 	SND_SOC_DAPM_OUTPUT("HPR"),
 };
-static const struct snd_soc_dapm_route intercon[] = {
+static const char *intercon[][3] = {
 
 	/* Left ADC Mux */
 	{"Left ADC Mux", "Mic", "MIC"},
@@ -407,14 +486,16 @@ stmp378x_codec_dac_power_on(struct stmp378x_codec_priv *stmp378x_adc)
 	/* Update HP volume over zero crossings */
 	HW_AUDIOOUT_HPVOL_SET(BM_AUDIOOUT_HPVOL_EN_MSTR_ZCD);
 
+	/* Mute HP output */
+    CHLOG("Muting headphones\n");
+	HW_AUDIOOUT_HPVOL_SET(BM_AUDIOOUT_HPVOL_MUTE);
 	/* Power up HP output */
 	HW_AUDIOOUT_ANACTRL_SET(BM_AUDIOOUT_ANACTRL_HP_HOLD_GND);
 	HW_RTC_PERSISTENT0_SET(BF_RTC_PERSISTENT0_SPARE_ANALOG(0x2));
 	HW_AUDIOOUT_PWRDN_CLR(BM_AUDIOOUT_PWRDN_HEADPHONE);
 	HW_AUDIOOUT_ANACTRL_SET(BM_AUDIOOUT_ANACTRL_HP_CLASSAB);
 	HW_AUDIOOUT_ANACTRL_CLR(BM_AUDIOOUT_ANACTRL_HP_HOLD_GND);
-	/* Mute HP output */
-	HW_AUDIOOUT_HPVOL_SET(BM_AUDIOOUT_HPVOL_MUTE);
+
 
 	/* Power up speaker amp */
 	HW_AUDIOOUT_PWRDN_CLR(BM_AUDIOOUT_PWRDN_SPEAKER);
@@ -432,6 +513,7 @@ stmp378x_codec_dac_power_down(struct stmp378x_codec_priv *stmp378x_adc)
 	HW_AUDIOOUT_ANACTRL_SET(BM_AUDIOOUT_ANACTRL_HP_HOLD_GND);
 
 	/* Mute HP output */
+    CHLOG("Muting headphones\n");
 	HW_AUDIOOUT_HPVOL_SET(BM_AUDIOOUT_HPVOL_MUTE);
 	/* Power down HP output */
 	HW_AUDIOOUT_PWRDN_SET(BM_AUDIOOUT_PWRDN_HEADPHONE);
@@ -534,6 +616,11 @@ stmp378x_codec_dac_enable(struct stmp378x_codec_priv *stmp378x_adc)
 
 	/* Power on DAC codec */
 	stmp378x_codec_dac_power_on(stmp378x_adc);
+
+    // Mute the speaker, which will be unmuted if audio is ever played.
+    HW_AUDIOOUT_SPEAKERCTRL_SET(BM_AUDIOOUT_SPEAKERCTRL_MUTE);
+    CHLOG("Muting headphones\n");
+    HW_AUDIOOUT_HPVOL_SET(BM_AUDIOOUT_HPVOL_MUTE);
 }
 
 static void stmp378x_codec_dac_disable(struct stmp378x_codec_priv *stmp378x_adc)
@@ -769,6 +856,9 @@ struct snd_soc_codec_device soc_codec_dev_stmp378x = {
 	.resume		= stmp378x_codec_resume,
 };
 EXPORT_SYMBOL_GPL(soc_codec_dev_stmp378x);
+EXPORT_SYMBOL_GPL(stmp3xxx_speaker_muted);
+EXPORT_SYMBOL_GPL(stmp3xxx_headphone_muted);
+EXPORT_SYMBOL_GPL(stmp3xxx_playback_streams);
 
 MODULE_DESCRIPTION("STMP378X ADC/DAC codec");
 MODULE_AUTHOR("Vladislav Buzov");

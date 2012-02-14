@@ -67,7 +67,7 @@ static int stmp3xxxmmc_hw_init_ssp1(void)
 	int ret;
 
 	mmc_drive_power = stmp3xxx_valid_pin(MMC_POWER);
-	mmc_wp_supported = stmp3xxx_valid_pin(MMC_WP);
+	mmc_wp_supported = 0; //stmp3xxx_valid_pin(MMC_WP);
 
 	ret = stmp3xxx_request_pin_group(&mmc_pins, "mmc");
 	if (ret)

@@ -53,7 +53,9 @@ static struct profile {
 	{ 261820, 130910, 130910, 0, 1225000, 1125000, 173000 },
 	{ 360000, 120000, 120000, 0, 1350000, 1250000, 200000 },
 	{ 392730, 130910, 130910, 0, 1400000, 1300000, 225000 },
-	{ 454740, 151580, 151580, 0, 1550000, 1450000, 355000 },
+//	{ 454740, 151580, 151580, 0, 1550000, 1450000, 355000 },
+	{ 454740, 227370, 130910, 0, 1550000, 1450000, 355000 },
+//	{ 454740, 227370, 151580, 0, 1550000, 1450000, 355000 },
 };
 
 static struct stmp3xxx_cpufreq {
@@ -152,6 +154,7 @@ static int set_op(unsigned int target_freq)
 	struct regulator *vddd, *vdddbo, *cur_limit;
 	struct cpufreq_freqs freqs;
 	int ret = 0, i;
+    static int is_first_run = 1;
 
 	cur_limit = cpufreq_bdata.regulator;
 	pr_debug("%s: entered\n", __func__);
@@ -178,9 +181,13 @@ static int set_op(unsigned int target_freq)
 
 	freqs.old = clk_get_rate(cpu_clk);
 	freqs.cpu = 0;
-	for (i = 0; i < ARRAY_SIZE(profiles) - 1; i++) {
-		if (profiles[i].cpu <= target_freq &&
-		    target_freq < profiles[i + 1].cpu) {
+	for (i = 0; i < ARRAY_SIZE(profiles); i++) {
+		// If the target frequency is bigger than the CPU frequency at the
+		// current slot, but less than the frequency at the next slot, pick
+		// the current frequency to use.
+		if (profiles[i].cpu <= target_freq 
+			&& (i+1 >= ARRAY_SIZE(profiles)
+			|| profiles[i + 1].cpu > target_freq)) {
 			freqs.new = profiles[i].cpu;
 			cpufreq_bdata.next_freq_id = i;
 			break;
@@ -193,10 +200,12 @@ static int set_op(unsigned int target_freq)
 	}
 
 	pr_debug("target_freq %d, new %d\n", target_freq, freqs.new);
+/*
 	if (i == ARRAY_SIZE(profiles) - 1) {
 		freqs.new = profiles[i].cpu;
 		cpufreq_bdata.next_freq_id = i;
 	}
+*/
 
 	if (IS_ERR(vddd)) {
 		ret = PTR_ERR(vddd);
@@ -220,8 +229,9 @@ static int set_op(unsigned int target_freq)
 	}
 
 	cpufreq_notify_transition(&freqs, CPUFREQ_PRECHANGE);
-	if (freqs.old > freqs.new) {
+	if (freqs.old > freqs.new || is_first_run) {
 		int ss = profiles[i].ss;
+        is_first_run = 0;
 		clk_set_rate(cpu_clk, profiles[i].cpu);
 		clk_set_rate(ahb_clk, profiles[i].ahb);
 		clk_set_rate(emi_clk, profiles[i].emi);
@@ -238,7 +248,7 @@ static int set_op(unsigned int target_freq)
 							    profiles[i].vddd);
 			regulator_set_voltage(vdddbo, profiles[i].vddd_bo, profiles[i].vddd_bo);
 		}
-	} else {
+	} else if(freqs.old < freqs.new) {
 		int ss = profiles[i].ss;
 		if (vddd && vdddbo) {
 			ret = regulator_set_voltage(vddd, profiles[i].vddd, profiles[i].vddd);

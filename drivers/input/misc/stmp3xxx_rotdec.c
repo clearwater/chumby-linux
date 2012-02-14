@@ -22,20 +22,128 @@
 #include <mach/regs-timrot.h>
 #include <mach/rotdec.h>
 
-static int relative;
-static unsigned int poll_interval = 500;
+static int absolute = 0;
+static unsigned int poll_interval = 50;
+static int previous_state = 0;
+static int accumulated_counts = 0;
+static int last_direction = 0;
+static int output_divider = 2;
 
 void stmp3xxx_rotdec_flush(struct input_polled_dev *dev)
 {
 	/* in relative mode, reading the counter resets it */
-	if (relative)
+	if (!absolute)
 		HW_TIMROT_ROTCOUNT_RD();
 }
 
 void stmp3xxx_rotdec_poll(struct input_polled_dev *dev)
 {
-	s16 cnt = HW_TIMROT_ROTCOUNT_RD() & BM_TIMROT_ROTCOUNT_UPDOWN;
-	if (relative)
+	unsigned int new_state = (HW_TIMROT_ROTCTRL_RD()&BM_TIMROT_ROTCTRL_STATE)>>BP_TIMROT_ROTCTRL_STATE;
+	s16 cnt;
+	
+	// hardware only counts full rotations
+	cnt = HW_TIMROT_ROTCOUNT_RD() & BM_TIMROT_ROTCOUNT_UPDOWN;
+	
+	// upward counting state order is 0 1 3 2, counts up at 0
+	// downward counting state order is 0 2 3 1, counts doown at 0
+	
+	if (!absolute && !((previous_state | new_state)&~3)) {
+	    switch((previous_state<<4)|new_state) {
+			case 0x00:
+				// if we weren't already moving, more likely edge glitching
+				// than a rotation by 4
+				if (cnt>0)
+					cnt = (cnt-1)*4;
+				else if (cnt<0)
+					cnt = (cnt+1)*4;
+				else
+					cnt = cnt*4;
+				break;
+
+			case 0x11:
+				if (cnt<0)
+					cnt = (cnt+1)*4;
+				else
+					cnt = cnt*4;
+				break;
+			case 0x33:
+				cnt = cnt*4;
+				break;
+			case 0x22:
+				if (cnt>0)
+					cnt = (cnt-1)*4;
+				else
+					cnt = cnt*4;
+				break;
+
+			/* Counting up */
+			case 0x01:
+			case 0x13:
+			case 0x32:
+				cnt = cnt*4+1;
+				break;
+			case 0x20:
+				if (cnt > 0)
+					cnt = cnt*4-3;
+				else
+					cnt = cnt*4+1;
+				break;
+
+			/* Counting down */
+			case 0x02:
+			case 0x23:
+			case 0x31:
+				cnt = cnt*4-1;
+				break;
+			case 0x10:
+				if (cnt < 0)
+					cnt = cnt*4+3;
+				else
+					cnt = cnt*4-1;
+				break;
+
+			/* Other counts of some sort */
+			case 0x03:
+				// no way to tell which direction if we weren't already moving
+				// or moved more than one full rotation
+				if (cnt < 0)
+					cnt = cnt*4 - 2;
+				else if (cnt > 0)
+					cnt = cnt*4 + 2;
+				else
+					cnt = cnt*4 + last_direction*2;
+				break;
+			case 0x12:
+				cnt = cnt*4+2;
+				break;
+			case 0x30:
+				if (cnt < 0)
+					cnt = cnt*4+2;
+				else
+					cnt = cnt*4-2;
+				break;
+			case 0x21:
+				cnt = cnt*4-2;
+				break;
+	    }
+
+	    if (cnt > 0)
+			last_direction = 1;
+	    else if (cnt < 0)
+			last_direction = -1;
+	    else
+			last_direction = 0;
+	    accumulated_counts += cnt;
+	    
+		if (accumulated_counts < 0) {
+			cnt = -(-accumulated_counts/output_divider);
+		} else {
+			cnt = accumulated_counts/output_divider;
+		}
+		accumulated_counts -= output_divider*cnt;
+	}
+	previous_state = new_state;
+	if (!absolute)
 		input_report_rel(dev->input, REL_WHEEL, cnt);
 	else
 		input_report_abs(dev->input, ABS_WHEEL, cnt);
@@ -60,7 +168,8 @@ static int stmp3xxx_rotdec_probe(struct platform_device *pdev)
 		 * to avoid lines >80 chars wide
 		 */
 		HW_TIMROT_ROTCTRL_WR(
-		 BF_TIMROT_ROTCTRL_DIVIDER(0x0) | /* 32kHz divider - 1 */
+		 //BF_TIMROT_ROTCTRL_DIVIDER(0x0) | /* 32kHz divider - 1 */
+		 BF_TIMROT_ROTCTRL_DIVIDER(0x0F) | /* 32/(15+1) = 2kHz sampling */
 		 BF_TIMROT_ROTCTRL_OVERSAMPLE(
 			BV_TIMROT_ROTCTRL_OVERSAMPLE__2X) |
 		 BF_TIMROT_ROTCTRL_SELECT_B(
@@ -73,7 +182,7 @@ static int stmp3xxx_rotdec_probe(struct platform_device *pdev)
 		 BM_TIMROT_ROTCTRL_POLARITY_A
 		);
 
-		if (relative)
+		if (!absolute)
 			HW_TIMROT_ROTCTRL_SET(BM_TIMROT_ROTCTRL_RELATIVE);
 		else
 			HW_TIMROT_ROTCTRL_CLR(BM_TIMROT_ROTCTRL_RELATIVE);
@@ -98,7 +207,7 @@ static int stmp3xxx_rotdec_probe(struct platform_device *pdev)
 		rotdec->poll_interval = poll_interval; /* msec */
 
 		rotdec->input->name = "stmp3xxx-rotdec";
-		if (relative)
+		if (!absolute)
 			input_set_capability(rotdec->input, EV_REL, REL_WHEEL);
 		else {
 			input_set_capability(rotdec->input, EV_ABS, ABS_WHEEL);
@@ -113,6 +222,7 @@ static int stmp3xxx_rotdec_probe(struct platform_device *pdev)
 				rc);
 			goto err_reg_polldev;
 		}
+		previous_state = (HW_TIMROT_ROTCTRL_RD()&BM_TIMROT_ROTCTRL_STATE)>>BP_TIMROT_ROTCTRL_STATE;
 	}
 
 	return 0;
@@ -163,8 +273,9 @@ static void __exit stmp3xxx_rotdec_exit(void)
 module_init(stmp3xxx_rotdec_init);
 module_exit(stmp3xxx_rotdec_exit);
 
-module_param(relative, bool, 0600);
+module_param(absolute, bool, 0600);
 module_param(poll_interval, uint, 0600);
+module_param(output_divider, uint, 0600);
 
 MODULE_AUTHOR("Drew Benedetti <drewb@embeddedalley.com>");
 MODULE_DESCRIPTION("STMP3xxx rotary decoder driver");

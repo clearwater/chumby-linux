@@ -31,8 +31,19 @@
 #include <mach/hardware.h>
 
 #include <mach/regs-apbx.h>
+#include <mach/regs-audioout.h>
+#include <mach/regs-audioin.h>
 
 #include "stmp3xxx_pcm.h"
+
+
+#if 1
+#define CHLOG(format, arg...)            \
+    printk("stmp3xxx_pcm.c - %s():%d - " format, __func__, __LINE__, ## arg)
+#else
+#define CHLOG(format, arg...)
+#endif
+
 
 static const struct snd_pcm_hardware stmp3xxx_pcm_hardware = {
 	.info			= SNDRV_PCM_INFO_MMAP |
@@ -168,7 +179,7 @@ static void stmp3xxx_pcm_stop(struct snd_pcm_substream *substream)
 	int desc;
 
 	/* Freez DMA channel for a moment */
-	stmp3xxx_dma_freeze(prtd->dma_ch);
+	//stmp3xxx_dma_freeze(prtd->dma_ch);
 
 	/* Find current DMA descriptor */
 	pos = HW_APBX_CHn_BAR_RD(prtd->params->dma_ch);
@@ -179,32 +190,45 @@ static void stmp3xxx_pcm_stop(struct snd_pcm_substream *substream)
 					= BM_APBX_CHn_CMD_SEMAPHORE;
 
 	/* Let the current DMA transaction finish */
-	stmp3xxx_dma_unfreeze(prtd->dma_ch);
+	//stmp3xxx_dma_unfreeze(prtd->dma_ch);
 }
 
 static int stmp3xxx_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 {
 	struct stmp3xxx_runtime_data *prtd = substream->runtime->private_data;
 	int ret = 0;
+    int playback = substream->stream == SNDRV_PCM_STREAM_PLAYBACK ? 1 : 0;
 
 	switch (cmd) {
 
 	case SNDRV_PCM_TRIGGER_START:
+        CHLOG("Starting %s DMA\n", playback?"playback":"recording");
+
+        // Set the DMA wait timer to wait 31 clock cycles before starting.
+        if(playback)
+            HW_AUDIOOUT_CTRL_SET(0x001f0000);
+        else
+            HW_AUDIOIN_CTRL_SET(0x001f0000);
+
+		BUG_ON(!prtd);
 		stmp3xxx_dma_go(prtd->dma_ch, prtd->dma_desc_array, 1);
 		break;
 
 	case SNDRV_PCM_TRIGGER_STOP:
+        if(playback)
+            HW_AUDIOOUT_HPVOL_SET(BM_AUDIOOUT_HPVOL_MUTE);
+        CHLOG("Stopping %s DMA\n", playback?"playback":"recording");
 		stmp3xxx_pcm_stop(substream);
 		break;
 
 	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		stmp3xxx_dma_unfreeze(prtd->dma_ch);
+		//stmp3xxx_dma_unfreeze(prtd->dma_ch);
 		break;
 
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-		stmp3xxx_dma_freeze(prtd->dma_ch);
+		//stmp3xxx_dma_freeze(prtd->dma_ch);
 		break;
 
 	default:
@@ -272,6 +296,8 @@ static int stmp3xxx_pcm_dma_request(struct snd_pcm_substream *substream)
 		       __func__, dma_data->dma_bus, dma_data->dma_ch);
 		return ret;
 	}
+    else 
+        CHLOG("Got DMA channel %d\n", dma_data->dma_ch);
 
 	/* Allocate memory for data and pio DMA descriptors */
 	prtd->dma_desc_array =

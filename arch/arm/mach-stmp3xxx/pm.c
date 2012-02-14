@@ -349,7 +349,7 @@ static int __init stmp37xx_pm_init(void)
 		return -ENOMEM;
 	}
 
-	pm_power_off = stmp37xx_pm_power_off;
+//	pm_power_off = stmp37xx_pm_power_off;
 	pm_idle = stmp37xx_pm_idle;
 	suspend_set_ops(&stmp37xx_suspend_ops);
 	return 0;
