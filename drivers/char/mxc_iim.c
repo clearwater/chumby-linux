@@ -25,6 +25,7 @@ static struct device *iim_dev;
 
 /*!
  * MXC IIM interface - memory map function
+ * This function maps 4KB IIM registers from IIM base address.
  *
  * @param file	     struct file *
  * @param vma	     structure vm_area_struct *
@@ -33,19 +34,13 @@ static struct device *iim_dev;
  */
 static int mxc_iim_mmap(struct file *file, struct vm_area_struct *vma)
 {
-	size_t size = vma->vm_end - vma->vm_start;
-
-	/* Check the physical addresses which can be mapped */
-	if ((vma->vm_pgoff != 0) || (size > iim_reg_size))
-		return -EINVAL;
-
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 
 	/* Remap-pfn-range will mark the range VM_IO and VM_RESERVED */
 	if (remap_pfn_range(vma,
 			    vma->vm_start,
 			    iim_reg_base >> PAGE_SHIFT,
-			    size,
+			    iim_reg_size,
 			    vma->vm_page_prot))
 		return -EAGAIN;
 

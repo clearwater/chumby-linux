@@ -623,7 +623,7 @@ __stmp_dram_133M_values:
 	.word	7
 	.word	0x01000001 //rw_same_en,reg_dimm_enable,rd2rd_turn,priority_en
 	.word	11
-	.word	0x00070203 //max_cs_reg,command_age_count,column_size,caslat
+	.word	0x00070204 // Chumby: 0x00070203 in freescale mainline
 	.word	12
 	.word	0x02020000
 	.word	13
@@ -631,9 +631,9 @@ __stmp_dram_133M_values:
 	.word	15
 	.word	0x02040000 @ t_rp 2, t_dal 4
 	.word	17
-	.word	0x0a000508 @ dll_start_point 0x0a, dll_increment 0x05, t_rc 8
+	.word	0x0a000508 @ dll_start_point 0x0a, dll_increment 0x05, t_rc 8 // Chumby
 	.word	19
-	.word	0x02021a1a //dqs_out_shift_bypass,dqs_out_shift,dll_dqs_delay_bypass_1,dll_dqs_delay_bypass_0
+	.word	0x02021a1a //dqs_out_shift_bypass,dqs_out_shift,dll_dqs_delay_bypass_1,dll_dqs_delay_bypass_0 // Chumby
 	.word	20
 	.word	0x02061c21 //trcd_int, tras_min, wr_dqs_shift_bypass, wr_dqs_shift
 	.word	21

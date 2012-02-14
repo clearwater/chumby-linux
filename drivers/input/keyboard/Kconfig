@@ -353,4 +353,10 @@ config KEYBOARD_CHUMBY_BEND
     	Treat the Chumby "bend" switch as a keyboard device.  When pressed,
         the keyboard will see the "C" key pressed.
 
+config KEYBOARD_MC9S08DZ60
+	tristate "mc9s08dz60 keyboard"
+	depends on MXC_PMIC_MC9S08DZ60
+	help
+	 -to be written-
+
 endif

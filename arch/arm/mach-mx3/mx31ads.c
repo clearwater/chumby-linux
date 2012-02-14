@@ -1,7 +1,7 @@
 /*
  *  Copyright (C) 2000 Deep Blue Solutions Ltd
  *  Copyright (C) 2002 Shane Nay (shane@minirl.com)
- *  Copyright 2005-2008 Freescale Semiconductor, Inc. All Rights Reserved.
+ *  Copyright 2005-2009 Freescale Semiconductor, Inc. All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -270,12 +270,10 @@ static void mxc_init_nor_mtd(void)
 }
 #endif
 
-/* MTD NAND flash */
+/* NAND Flash Partitions */
+#ifdef CONFIG_MTD_PARTITIONS
 
-#if defined(CONFIG_MTD_NAND_MXC) || defined(CONFIG_MTD_NAND_MXC_MODULE) \
-	|| defined(CONFIG_MTD_NAND_MXC_V2) || defined(CONFIG_MTD_NAND_MXC_V2_MODULE)
-
-static struct mtd_partition mxc_nand_partitions[4] = {
+static struct mtd_partition nand_flash_partitions[4] = {
 	{
 	 .name = "nand.bootloader",
 	 .offset = 0,
@@ -294,9 +292,20 @@ static struct mtd_partition mxc_nand_partitions[4] = {
 	 .size = MTDPART_SIZ_FULL},
 };
 
+#endif
+
+/* MTD NAND flash */
+
+#if defined(CONFIG_MTD_NAND_MXC) \
+	|| defined(CONFIG_MTD_NAND_MXC_MODULE) \
+	|| defined(CONFIG_MTD_NAND_MXC_V2) \
+	|| defined(CONFIG_MTD_NAND_MXC_V2_MODULE)
+
 static struct flash_platform_data mxc_nand_data = {
-	.parts = mxc_nand_partitions,
-	.nr_parts = ARRAY_SIZE(mxc_nand_partitions),
+	#ifdef CONFIG_MTD_PARTITIONS
+		.parts = nand_flash_partitions,
+		.nr_parts = ARRAY_SIZE(nand_flash_partitions),
+	#endif
 	.width = 1,
 };
 
@@ -335,6 +344,151 @@ static inline void mxc_init_nand_mtd(void)
 {
 }
 #endif
+
+/* i.MX MTD NAND Flash Controller */
+
+#if defined(CONFIG_MTD_NAND_IMX_NFC) || defined(CONFIG_MTD_NAND_IMX_NFC_MODULE)
+
+/* Resources for this device. */
+
+static struct resource imx_nfc_resources[] = {
+	{
+	 .flags = IORESOURCE_MEM,
+	 .start = NFC_BASE_ADDR + 0x000,
+	 .end   = NFC_BASE_ADDR + 0x840 - 1,
+	 .name  = IMX_NFC_BUFFERS_ADDR_RES_NAME,
+	 },
+	{
+	 .flags = IORESOURCE_MEM,
+	 .start = NFC_BASE_ADDR + 0xE00,
+	 .end   = NFC_BASE_ADDR + 0xE20 - 1,
+	 .name  = IMX_NFC_PRIMARY_REGS_ADDR_RES_NAME,
+	 },
+	{
+	 .flags = IORESOURCE_IRQ,
+	 .start = MXC_INT_NANDFC,
+	 .end   = MXC_INT_NANDFC,
+	 .name  = IMX_NFC_INTERRUPT_RES_NAME,
+	 },
+};
+
+/**
+ * imx_nfc_set_page_size() - Tells the hardware the page size.
+ *
+ * @data_size_in_bytes:  The page size in bytes (e.g., 512, 2048, etc.). This
+ *                       size refers specifically to the the data bytes in the
+ *                       page, *not* including out-of-band bytes. The return
+ *                       value is zero if the operation succeeded. Do not
+ *                       interpret a non-zero value as an error code - it only
+ *                       indicates failure. The driver will decide what error
+ *                       code to return to its caller.
+ */
+static int imx_nfc_set_page_size(unsigned int data_size_in_bytes)
+{
+
+	unsigned long x = __raw_readl(MXC_CCM_RCSR);
+
+	switch (data_size_in_bytes) {
+
+	case 512:
+		x &= ~MXC_CCM_RCSR_NFMS;
+		break;
+
+	case 2048:
+		x |= MXC_CCM_RCSR_NFMS;
+		break;
+
+	default:
+		return !0;
+		break;
+
+	}
+
+	__raw_writel(x, MXC_CCM_RCSR);
+
+	return 0;
+
+}
+
+/*
+ * Platform-specific information about this device. Some of the details depend
+ * on the SoC. See imx_init_nfc() below for code that fills in the rest.
+ */
+
+static struct imx_nfc_platform_data imx_nfc_platform_data = {
+	.force_ce           = false,
+	.target_cycle_in_ns = 50,
+	.clock_name         = "nfc_clk",
+	.set_page_size      = imx_nfc_set_page_size,
+	.interleave         = false,
+	#ifdef CONFIG_MTD_PARTITIONS
+		.partitions         = nand_flash_partitions,
+		.partition_count    = ARRAY_SIZE(nand_flash_partitions),
+	#endif
+};
+
+/* The structure that represents the NFC device. */
+
+static struct platform_device imx_nfc_device = {
+	.name = IMX_NFC_DRIVER_NAME,
+	.id = 0,
+	.dev = {
+		.release       = mxc_nop_release,
+		.platform_data = &imx_nfc_platform_data,
+	 },
+	.resource      = imx_nfc_resources,
+	.num_resources = ARRAY_SIZE(imx_nfc_resources),
+};
+
+/**
+ * imx_init_nfc() - Sets up the NFC for this platform.
+ *
+ * This function sets up data structures representing the NFC device on this
+ * platform and registers the device with the platform management system.
+ */
+
+static void imx_nfc_init(void)
+{
+
+	/*
+	 * A field in the Reset Control and Source Register register tells us
+	 * the bus width.
+	 */
+
+	if (__raw_readl(MXC_CCM_RCSR) & MXC_CCM_RCSR_NF16B)
+		imx_nfc_platform_data.bus_width_in_bits = 16;
+	else
+		imx_nfc_platform_data.bus_width_in_bits = 8;
+
+	/*
+	 * Discover the type of SoC we're running on and, based on that, fill in
+	 * some details about the NFC.
+	 */
+
+	if (cpu_is_mx31()) {
+		imx_nfc_platform_data.major_version = 1;
+		imx_nfc_platform_data.minor_version = 0;
+	} else if (cpu_is_mx32()) {
+		imx_nfc_platform_data.major_version = 2;
+		imx_nfc_platform_data.minor_version = 0;
+	} else {
+		pr_err("imx_nfc: Can't identify the SoC\n");
+		BUG();
+	}
+
+	/* Register the NFC device. */
+
+	(void)platform_device_register(&imx_nfc_device);
+
+}
+
+#else
+
+static inline void imx_nfc_init(void)
+{
+}
+
+#endif /* i.MX MTD NAND Flash Controller */
 
 static struct spi_board_info mxc_spi_board_info[] __initdata = {
 	{
@@ -631,7 +785,7 @@ int mxc_expio_init(void)
 extern unsigned int sdhc_get_card_det_status(struct device *dev);
 extern int sdhc_init_card_det(int id);
 
-static struct mxc_mmc_platform_data mmc0_data = {
+static struct mxc_mmc_platform_data mmc1_data = {
 	.ocr_mask = MMC_VDD_27_28 | MMC_VDD_28_29 | MMC_VDD_29_30,
 	.min_clk = 150000,
 	.max_clk = 25000000,
@@ -639,7 +793,7 @@ static struct mxc_mmc_platform_data mmc0_data = {
 	.status = sdhc_get_card_det_status,
 	.power_mmc = "VMMC1",
 };
-static struct mxc_mmc_platform_data mmc1_data = {
+static struct mxc_mmc_platform_data mmc2_data = {
 	.ocr_mask = MMC_VDD_27_28 | MMC_VDD_28_29 | MMC_VDD_29_30,
 	.min_clk = 150000,
 	.max_clk = 25000000,
@@ -696,7 +850,7 @@ static struct platform_device mxcsdhc1_device = {
 	.id = 0,
 	.dev = {
 		.release = mxc_nop_release,
-		.platform_data = &mmc0_data,
+		.platform_data = &mmc1_data,
 		},
 	.num_resources = ARRAY_SIZE(mxcsdhc1_resources),
 	.resource = mxcsdhc1_resources,
@@ -708,7 +862,7 @@ static struct platform_device mxcsdhc2_device = {
 	.id = 1,
 	.dev = {
 		.release = mxc_nop_release,
-		.platform_data = &mmc1_data,
+		.platform_data = &mmc2_data,
 		},
 	.num_resources = ARRAY_SIZE(mxcsdhc2_resources),
 	.resource = mxcsdhc2_resources,
@@ -898,6 +1052,7 @@ static void __init mxc_board_init(void)
 	mxc_init_extuart();
 	mxc_init_nor_mtd();
 	mxc_init_nand_mtd();
+	imx_nfc_init();
 
 	i2c_register_board_info(0, mxc_i2c_info, ARRAY_SIZE(mxc_i2c_info));
 	spi_register_board_info(mxc_spi_board_info,

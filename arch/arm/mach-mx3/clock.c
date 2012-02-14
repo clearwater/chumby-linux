@@ -1,5 +1,5 @@
 /*
- * Copyright 2005-2008 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright 2005-2009 Freescale Semiconductor, Inc. All Rights Reserved.
  * Copyright (C) 2008 by Sascha Hauer <kernel@pengutronix.de>
  *
  * This program is free software; you can redistribute it and/or
@@ -328,6 +328,44 @@ static void _clk_nfc_recalc(struct clk *clk)
 	nfc_pdf = PDR0(MXC_CCM_PDR0_NFC_PODF_MASK,
 		       MXC_CCM_PDR0_NFC_PODF_OFFSET);
 	clk->rate = clk->parent->rate / (nfc_pdf + 1);
+
+}
+
+static int _clk_nfc_set_rate(struct clk *clk, unsigned long rate)
+{
+	u32 reg;
+	u32 div;
+
+	div = clk->parent->rate / rate;
+
+	if ((clk->parent->rate / div) != rate)
+		return -EINVAL;
+
+	if (div > 8)
+		return -EINVAL;
+
+	reg = __raw_readl(MXC_CCM_PDR0) & ~MXC_CCM_PDR0_NFC_PODF_MASK;
+	reg |= (div - 1) << MXC_CCM_PDR0_NFC_PODF_OFFSET;
+	__raw_writel(reg, MXC_CCM_PDR0);
+
+	clk->rate = rate;
+
+	return 0;
+
+}
+
+static unsigned long _clk_nfc_round_rate(struct clk *clk, unsigned long rate)
+{
+	u32 div = clk->parent->rate / rate;
+
+	if (clk->parent->rate % rate)
+		div++;
+
+	if (div > 8)
+		return -EINVAL;
+
+	return clk->parent->rate / div;
+
 }
 
 static void _clk_hsp_recalc(struct clk *clk)
@@ -627,10 +665,10 @@ static struct clk gpt_clk = {
 };
 
 static struct clk pwm_clk = {
-	.name = "pwm_clk",
+	.name = "pwm",
 	.parent = &perclk_clk,
 	.enable = _clk_enable,
-	.enable_reg = MXC_CCM_CGR0,
+	.enable_reg = MXC_CCM_CGR1,
 	.enable_shift = MXC_CCM_CGR1_PWM_OFFSET,
 	.disable = _clk_disable,
 };
@@ -658,6 +696,8 @@ static struct clk nfc_clk = {
 	.name = "nfc_clk",
 	.parent = &ahb_clk,
 	.recalc = _clk_nfc_recalc,
+	.set_rate = _clk_nfc_set_rate,
+	.round_rate = _clk_nfc_round_rate,
 };
 
 static struct clk scc_clk = {

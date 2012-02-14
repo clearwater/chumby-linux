@@ -48,6 +48,7 @@
 #include <mach/regs-icoll.h>
 #include <mach/regs-apbh.h>
 #include <mach/regs-apbx.h>
+#include <mach/regs-ocotp.h>
 
 #include "common.h"
 
@@ -66,6 +67,12 @@ static void stmp378x_ack_irq(unsigned int irq)
 	(void) HW_ICOLL_STAT_RD();
 }
 
+static void stmp378x_disable_irq(unsigned int irq)
+{
+	/* IRQ disable */
+	HW_ICOLL_INTERRUPTn_CLR(irq, BM_ICOLL_INTERRUPTn_ENABLE);
+}
+
 static void stmp378x_mask_irq(unsigned int irq)
 {
 	/* IRQ disable */
@@ -79,6 +86,7 @@ static void stmp378x_unmask_irq(unsigned int irq)
 }
 
 static struct irq_chip stmp378x_chip = {
+	.disable = stmp378x_disable_irq,
 	.ack	= stmp378x_ack_irq,
 	.mask	= stmp378x_mask_irq,
 	.unmask = stmp378x_unmask_irq,
@@ -91,6 +99,7 @@ static void stmp378x_gpio_ack_irq(unsigned int irq)
 }
 
 static struct irq_chip stmp378x_gpio_chip = {
+	.disable = stmp378x_disable_irq,
 	.ack	= stmp378x_gpio_ack_irq,
 	.mask	= stmp378x_mask_irq,
 	.unmask = stmp378x_unmask_irq,
@@ -395,3 +404,16 @@ void __init stmp378x_map_io(void)
 {
 	iotable_init(stmp378x_io_desc, ARRAY_SIZE(stmp378x_io_desc));
 }
+
+int get_evk_board_version()
+{
+	int boardid;
+	boardid = HW_OCOTP_CUSTCAP_RD();
+	boardid &= 0x30000000;
+	boardid = boardid >> 28;
+
+	return boardid;
+}
+
+EXPORT_SYMBOL_GPL(get_evk_board_version);
+

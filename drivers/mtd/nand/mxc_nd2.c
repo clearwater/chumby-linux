@@ -120,6 +120,28 @@ static irqreturn_t mxc_nfc_irq(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static void nfc_memcpy(void *dest, void *src, int len)
+{
+	u8 *d = dest;
+	u8 *s = src;
+
+	while (len > 0) {
+		if (len >= 4) {
+			*(u32 *)d = *(u32 *)s;
+			d += 4;
+			s += 4;
+			len -= 4;
+		} else {
+			*(u16 *)d = *(u16 *)s;
+			len -= 2;
+			break;
+		}
+	}
+
+	if (len)
+		BUG();
+}
+
 /*
  * Functions to transfer data to/from spare erea.
  */
@@ -140,16 +162,16 @@ copy_spare(struct mtd_info *mtd, void *pbuf, void *pspare, int len, bool bfrom)
 
 	if (bfrom) {
 		for (i = 0; i < n - 1; i++)
-			memcpy(&d[i * j], &s[i * t], j);
+			nfc_memcpy(&d[i * j], &s[i * t], j);
 
 		/* the last section */
-		memcpy(&d[i * j], &s[i * t], len - i * j);
+		nfc_memcpy(&d[i * j], &s[i * t], len - i * j);
 	} else {
 		for (i = 0; i < n - 1; i++)
-			memcpy(&s[i * t], &d[i * j], j);
+			nfc_memcpy(&s[i * t], &d[i * j], j);
 
 		/* the last section */
-		memcpy(&s[i * t], &d[i * j], len - i * j);
+		nfc_memcpy(&s[i * t], &d[i * j], len - i * j);
 	}
 }
 
@@ -892,6 +914,8 @@ static void mxc_nand_command(struct mtd_info *mtd, unsigned command,
 		}
 
 		g_nandfc_info.colAddr = column;
+		column = 0;
+
 		break;
 
 	case NAND_CMD_PAGEPROG:
@@ -907,7 +931,7 @@ static void mxc_nand_command(struct mtd_info *mtd, unsigned command,
 		 * byte alignment, so we can use
 		 * memcpy safely
 		 */
-		memcpy(MAIN_AREA0, data_buf, mtd->writesize);
+		nfc_memcpy(MAIN_AREA0, data_buf, mtd->writesize);
 		copy_spare(mtd, oob_buf, SPARE_AREA0, mtd->oobsize, false);
 #endif
 
@@ -963,7 +987,7 @@ static void mxc_nand_command(struct mtd_info *mtd, unsigned command,
 		 * byte alignment, so we can use
 		 * memcpy safely
 		 */
-		memcpy(data_buf, MAIN_AREA0, mtd->writesize);
+		nfc_memcpy(data_buf, MAIN_AREA0, mtd->writesize);
 		copy_spare(mtd, oob_buf, SPARE_AREA0, mtd->oobsize, true);
 #endif
 
@@ -972,7 +996,7 @@ static void mxc_nand_command(struct mtd_info *mtd, unsigned command,
 	case NAND_CMD_READID:
 		send_read_id();
 		g_nandfc_info.colAddr = column;
-		memcpy(data_buf, MAIN_AREA0, 2048);
+		nfc_memcpy(data_buf, MAIN_AREA0, 2048);
 
 		break;
 	}
@@ -1122,12 +1146,10 @@ static void mxc_nfc_init(void)
 	/* Unlock Block Command for given address range */
 	raw_write(NFC_SET_WPC(NFC_WPC_UNLOCK), REG_NFC_WPC);
 
-#ifndef CONFIG_ARCH_MX51
 	/* Enable symetric mode by default except mx37TO1.0 */
 	if (!(cpu_is_mx37_rev(CHIP_REV_1_0) == 1))
 		raw_write(raw_read(REG_NFC_ONE_CYCLE) |
 			  NFC_ONE_CYCLE, REG_NFC_ONE_CYCLE);
-#endif
 }
 
 static int mxc_alloc_buf(void)

@@ -30,4 +30,5 @@ obj-$(CONFIG_KEYBOARD_HP7XX)		+= jornada720_kbd.o
 obj-$(CONFIG_KEYBOARD_MAPLE)		+= maple_keyb.o
 obj-$(CONFIG_KEYBOARD_BFIN)		+= bf54x-keys.o
 obj-$(CONFIG_KEYBOARD_SH_KEYSC)		+= sh_keysc.o
-obj-$(CONFIG_KEYBOARD_CHUMBY_BEND)		+= chumby_bend.o
+obj-$(CONFIG_KEYBOARD_CHUMBY_BEND)	+= chumby_bend.o
+obj-$(CONFIG_KEYBOARD_MC9S08DZ60)	+= mc9s08dz60_keyb.o

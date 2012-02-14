@@ -16,13 +16,17 @@
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/io.h>
+#include <linux/dma-mapping.h>
 #include <linux/platform_device.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/spi/spi.h>
+#include <linux/uio_driver.h>
 #include <linux/mxc_scc2_driver.h>
+#include <linux/pwm_backlight.h>
 #include <mach/hardware.h>
 #include <mach/spba.h>
+#include <asm/mach-types.h>
 #include "iomux.h"
 #include "crm_regs.h"
 #include <mach/sdma.h>
@@ -194,6 +198,69 @@ static void mxc_init_wdt(void)
 #else
 static inline void mxc_init_wdt(void)
 {
+}
+#endif
+
+#if defined(CONFIG_MXC_PWM)
+static struct resource pwm_resources[] = {
+	{
+	 .start = PWM1_BASE_ADDR,
+	 .end = PWM1_BASE_ADDR + 0x14,
+	 .flags = IORESOURCE_MEM,
+	 },
+};
+
+static struct platform_device mxc_pwm_device = {
+	.name = "mxc_pwm",
+	.id = 0,
+	.dev = {
+		.release = mxc_nop_release,
+		},
+	.num_resources = ARRAY_SIZE(pwm_resources),
+	.resource = pwm_resources,
+};
+
+static void mxc_init_pwm(void)
+{
+	printk(KERN_INFO "mxc_pwm_device registered\n");
+	if (platform_device_register(&mxc_pwm_device) < 0)
+		printk(KERN_ERR "registration of mxc_pwm device failed\n");
+}
+#else
+static void mxc_init_pwm(void)
+{
+
+}
+#endif
+
+#if defined(CONFIG_BACKLIGHT_PWM)
+static struct platform_pwm_backlight_data mxc_pwm_backlight_data = {
+	.pwm_id = 0,
+	.max_brightness = 255,
+	.dft_brightness = 128,
+	.pwm_period_ns = 78770,
+};
+
+static struct platform_device mxc_pwm_backlight_device = {
+	.name = "pwm-backlight",
+	.id = -1,
+	.dev = {
+		.release = mxc_nop_release,
+		.platform_data = &mxc_pwm_backlight_data,
+		},
+};
+
+static void mxc_init_pwm_backlight(void)
+{
+	printk(KERN_INFO "pwm-backlight device registered\n");
+	if (platform_device_register(&mxc_pwm_backlight_device) < 0)
+		printk(KERN_ERR
+		       "registration of pwm-backlight device failed\n");
+}
+#else
+static void mxc_init_pwm_backlight(void)
+{
+
 }
 #endif
 
@@ -431,16 +498,14 @@ static struct resource mxcspi1_resources[] = {
 	       },
 };
 
-extern void gpio_spi_chipselect_active(int cspi_mode, int status,
-				       int chipselect);
-extern void gpio_spi_chipselect_inactive(int cspi_mode, int status,
-					 int chipselect);
+extern void mx51_babbage_gpio_spi_chipselect_active(int cspi_mode, int status,
+						    int chipselect);
+extern void mx51_babbage_gpio_spi_chipselect_inactive(int cspi_mode, int status,
+						      int chipselect);
 /*! Platform Data for MXC CSPI1 */
 static struct mxc_spi_master mxcspi1_data = {
 	.maxchipselect = 4,
 	.spi_version = 23,
-	.chipselect_active = gpio_spi_chipselect_active,
-	.chipselect_inactive = gpio_spi_chipselect_inactive,
 };
 
 /*! Device Definition for MXC CSPI1 */
@@ -534,6 +599,12 @@ void __init mxc_init_spi(void)
 	/* SPBA configuration for CSPI2 - MCU is set */
 	spba_take_ownership(SPBA_CSPI1, SPBA_MASTER_A);
 #ifdef CONFIG_SPI_MXC_SELECT1
+	if (machine_is_mx51_babbage()) {
+		mxcspi1_data.chipselect_active =
+			mx51_babbage_gpio_spi_chipselect_active;
+		mxcspi1_data.chipselect_inactive =
+			mx51_babbage_gpio_spi_chipselect_inactive;
+	}
 	if (platform_device_register(&mxcspi1_device) < 0)
 		printk(KERN_ERR "Error: Registering the SPI Controller_1\n");
 #endif				/* CONFIG_SPI_MXC_SELECT1 */
@@ -779,10 +850,16 @@ struct mxc_dvfs_platform_data dvfs_core_data = {
 	.clk2_id = "gpc_dvfs_clk",
 	.gpc_cntr_reg_addr = MXC_GPC_CNTR,
 	.gpc_vcr_reg_addr = MXC_GPC_VCR,
+	.ccm_cdcr_reg_addr = MXC_CCM_CDCR,
+	.ccm_cacrr_reg_addr = MXC_CCM_CACRR,
+	.ccm_cdhipr_reg_addr = MXC_CCM_CDHIPR,
 	.dvfs_thrs_reg_addr = MXC_DVFSTHRS,
 	.dvfs_coun_reg_addr = MXC_DVFSCOUN,
 	.dvfs_emac_reg_addr = MXC_DVFSEMAC,
 	.dvfs_cntr_reg_addr = MXC_DVFSCNTR,
+	.prediv_mask = 0x1F800,
+	.prediv_offset = 11,
+	.prediv_val = 3,
 	.div3ck_mask = 0xE0000000,
 	.div3ck_offset = 29,
 	.div3ck_val = 2,
@@ -951,6 +1028,116 @@ static inline void mxc_init_iim(void)
 }
 #endif
 
+static struct resource mxc_gpu_resources[] = {
+	[0] = {
+		.start = MXC_INT_GPU2_IRQ,
+		.end = MXC_INT_GPU2_IRQ,
+		.name = "gpu_2d_irq",
+		.flags = IORESOURCE_IRQ,},
+	[1] = {
+		.start = MXC_INT_GPU,
+		.end = MXC_INT_GPU,
+		.name = "gpu_3d_irq",
+		.flags = IORESOURCE_IRQ,},
+};
+
+static struct platform_device gpu_device = {
+	.name = "mxc_gpu",
+	.id = 0,
+	.dev = {
+		.release = mxc_nop_release,
+		},
+	.num_resources = ARRAY_SIZE(mxc_gpu_resources),
+	.resource = mxc_gpu_resources,
+};
+
+static void __init mxc_init_gpu(void)
+{
+	platform_device_register(&gpu_device);
+}
+
+static struct resource mxc_gpu2d_resources[] = {
+	{
+	 .start = GPU2D_BASE_ADDR,
+	 .end = GPU2D_BASE_ADDR + SZ_4K - 1,
+	 .flags = IORESOURCE_MEM,
+	 },
+	{
+	 .flags = IORESOURCE_MEM,
+	 },
+};
+
+#if defined(CONFIG_UIO_PDRV_GENIRQ) || defined(CONFIG_UIO_PDRV_GENIRQ_MODULE)
+static struct clk *gpu_clk;
+
+int gpu2d_open(struct uio_info *info, struct inode *inode)
+{
+	gpu_clk = clk_get(NULL, "gpu2d_clk");
+	if (IS_ERR(gpu_clk))
+		return PTR_ERR(gpu_clk);
+
+	return clk_enable(gpu_clk);
+}
+
+int gpu2d_release(struct uio_info *info, struct inode *inode)
+{
+	if (IS_ERR(gpu_clk))
+		return PTR_ERR(gpu_clk);
+
+	clk_disable(gpu_clk);
+	clk_put(gpu_clk);
+	return 0;
+}
+
+static int gpu2d_mmap(struct uio_info *info, struct vm_area_struct *vma)
+{
+	int mi = vma->vm_pgoff;
+	if (mi < 0)
+		return -EINVAL;
+
+	vma->vm_flags |= VM_IO | VM_RESERVED;
+	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+
+	return remap_pfn_range(vma,
+			       vma->vm_start,
+			       info->mem[mi].addr >> PAGE_SHIFT,
+			       vma->vm_end - vma->vm_start,
+			       vma->vm_page_prot);
+}
+
+static struct uio_info gpu2d_info = {
+	.name = "imx_gpu2d",
+	.version = "1",
+	.irq = MXC_INT_GPU2_IRQ,
+	.open = gpu2d_open,
+	.release = gpu2d_release,
+	.mmap = gpu2d_mmap,
+};
+
+static struct platform_device mxc_gpu2d_device = {
+	.name = "uio_pdrv_genirq",
+	.dev = {
+		.release = mxc_nop_release,
+		.platform_data = &gpu2d_info,
+		.coherent_dma_mask = 0xFFFFFFFF,
+		},
+	.num_resources = ARRAY_SIZE(mxc_gpu2d_resources),
+	.resource = mxc_gpu2d_resources,
+};
+
+static inline void mxc_init_gpu2d(void)
+{
+	dma_alloc_coherent(&mxc_gpu2d_device.dev, SZ_8K, &mxc_gpu2d_resources[1].start, GFP_DMA);
+	mxc_gpu2d_resources[1].end = mxc_gpu2d_resources[1].start + SZ_8K - 1;
+
+	platform_device_register(&mxc_gpu2d_device);
+}
+#else
+static inline void mxc_init_gpu2d(void)
+{
+}
+#endif
+
 int __init mxc_init_devices(void)
 {
 	mxc_init_wdt();
@@ -969,5 +1156,9 @@ int __init mxc_init_devices(void)
 	mxc_init_busfreq();
 	mxc_init_dvfs();
 	mxc_init_iim();
+	mxc_init_gpu();
+	mxc_init_gpu2d();
+	mxc_init_pwm();
+	mxc_init_pwm_backlight();
 	return 0;
 }

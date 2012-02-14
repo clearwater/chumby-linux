@@ -15,6 +15,7 @@
 #include <linux/pm.h>
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
+#include <mach/hardware.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -662,47 +663,82 @@ static int sgtl5000_set_bias_level(struct snd_soc_codec *codec,
 				   enum snd_soc_bias_level level)
 {
 	u16 reg, ana_pwr;
+	int delay = 0;
 	pr_debug("dapm level %d\n", level);
 	switch (level) {
 	case SND_SOC_BIAS_ON:		/* full On */
-	case SND_SOC_BIAS_PREPARE:	/* partial On */
-		if ((codec->bias_level == SND_SOC_BIAS_ON) ||
-		    (codec->bias_level == SND_SOC_BIAS_PREPARE))
+		if (codec->bias_level == SND_SOC_BIAS_ON)
 			break;
-
-		/* must power up hp/line out before vag & dac to
-		   avoid pops. */
-		reg = sgtl5000_read(codec, SGTL5000_CHIP_ANA_POWER);
-		if ((reg & SGTL5000_HP_POWERUP) == 0) {
-			reg |= SGTL5000_VAG_POWERUP;
-			reg |= SGTL5000_REFTOP_POWERUP;
-			reg |= SGTL5000_DAC_POWERUP;
-			reg |= SGTL5000_ADC_POWERUP;
-			sgtl5000_write(codec, SGTL5000_CHIP_ANA_POWER, reg);
-			msleep(400);
-		}
 
 		reg = sgtl5000_read(codec, SGTL5000_CHIP_MIC_CTRL);
 		reg &= ~SGTL5000_BIAS_R_MASK;
 		reg |= SGTL5000_BIAS_R_4k << SGTL5000_BIAS_R_SHIFT;
 		sgtl5000_write(codec, SGTL5000_CHIP_MIC_CTRL, reg);
 
-		reg = sgtl5000_read(codec, SGTL5000_CHIP_ANA_CTRL);
-		reg |= SGTL5000_HP_ZCD_EN;
-		reg |= SGTL5000_ADC_ZCD_EN;
-		sgtl5000_write(codec, SGTL5000_CHIP_ANA_CTRL, reg);
+		/* must power up hp/line out before vag & dac to
+		   avoid pops. */
+		reg = sgtl5000_read(codec, SGTL5000_CHIP_ANA_POWER);
+		reg |= SGTL5000_VAG_POWERUP;
+		reg |= SGTL5000_DAC_POWERUP;
+		reg |= SGTL5000_ADC_POWERUP;
+		sgtl5000_write(codec, SGTL5000_CHIP_ANA_POWER, reg);
+		msleep(400);
+
+		break;
+
+	case SND_SOC_BIAS_PREPARE:	/* partial On */
+		if (codec->bias_level == SND_SOC_BIAS_PREPARE)
+			break;
+
+		reg = sgtl5000_read(codec, SGTL5000_CHIP_MIC_CTRL);
+		if ((reg & SGTL5000_BIAS_R_MASK) != 0) {
+			reg &= ~SGTL5000_BIAS_R_MASK;
+			sgtl5000_write(codec, SGTL5000_CHIP_MIC_CTRL, reg);
+		}
+
+		/* must power up hp/line out before vag & dac to
+		   avoid pops. */
+		reg = sgtl5000_read(codec, SGTL5000_CHIP_ANA_POWER);
+		if (reg & SGTL5000_VAG_POWERUP)
+			delay = 400;
+		reg &= ~SGTL5000_VAG_POWERUP;
+		reg |= SGTL5000_DAC_POWERUP;
+		reg |= SGTL5000_ADC_POWERUP;
+		sgtl5000_write(codec, SGTL5000_CHIP_ANA_POWER, reg);
+		if (delay)
+			msleep(delay);
+
 		break;
 
 	case SND_SOC_BIAS_STANDBY:	/* Off, with power */
-		reg = sgtl5000_read(codec, SGTL5000_CHIP_MIC_CTRL);
-		reg &= ~SGTL5000_BIAS_R_MASK;
-		reg |= SGTL5000_BIAS_R_off;
-		sgtl5000_write(codec, SGTL5000_CHIP_MIC_CTRL, reg);
+		/* soc doesn't do PREPARE state after record so make sure
+		   that anything that needs to be turned OFF gets turned off. */
+		if (codec->bias_level == SND_SOC_BIAS_STANDBY)
+			break;
 
-		reg = sgtl5000_read(codec, SGTL5000_CHIP_ANA_CTRL);
-		reg &= ~SGTL5000_HP_ZCD_EN;
-		reg &= ~SGTL5000_ADC_ZCD_EN;
-		sgtl5000_write(codec, SGTL5000_CHIP_ANA_CTRL, reg);
+		/* soc calls digital_mute to unmute before record but doesn't
+		   call digital_mute to mute after record. */
+		sgtl5000_digital_mute(&sgtl5000_dai, 1);
+
+		reg = sgtl5000_read(codec, SGTL5000_CHIP_MIC_CTRL);
+		if ((reg & SGTL5000_BIAS_R_MASK) != 0) {
+			reg &= ~SGTL5000_BIAS_R_MASK;
+			sgtl5000_write(codec, SGTL5000_CHIP_MIC_CTRL, reg);
+		}
+
+		/* must power up hp/line out before vag & dac to
+		   avoid pops. */
+		reg = sgtl5000_read(codec, SGTL5000_CHIP_ANA_POWER);
+		if (reg & SGTL5000_VAG_POWERUP) {
+			reg &= ~SGTL5000_VAG_POWERUP;
+			reg |= SGTL5000_DAC_POWERUP;
+			reg |= SGTL5000_ADC_POWERUP;
+			sgtl5000_write(codec, SGTL5000_CHIP_ANA_POWER, reg);
+			msleep(400);
+		}
+		reg &= ~(SGTL5000_DAC_POWERUP | SGTL5000_ADC_POWERUP);
+		sgtl5000_write(codec, SGTL5000_CHIP_ANA_POWER, reg);
+
 		break;
 
 	case SND_SOC_BIAS_OFF:	/* Off, without power */
@@ -711,7 +747,11 @@ static int sgtl5000_set_bias_level(struct snd_soc_codec *codec,
 		reg = sgtl5000_read(codec, SGTL5000_CHIP_ANA_POWER);
 		ana_pwr = reg;
 		reg &= ~SGTL5000_VAG_POWERUP;
-		reg &= ~SGTL5000_REFTOP_POWERUP;
+
+		/* Workaround for sgtl5000 rev 0x11 chip audio suspend failure
+		   issue on mx25 */
+		/* reg &= ~SGTL5000_REFTOP_POWERUP; */
+
 		sgtl5000_write(codec, SGTL5000_CHIP_ANA_POWER, reg);
 		msleep(600);
 
@@ -920,6 +960,9 @@ static int sgtl5000_init(struct snd_soc_device *socdev)
 	/* enable small pop */
 	ref_ctrl |= SGTL5000_SMALL_POP;
 
+	/* Controls the output bias current for the lineout */
+	lo_ctrl |= (SGTL5000_LINE_OUT_CURRENT_360u << SGTL5000_LINE_OUT_CURRENT_SHIFT);
+
 	/* set short detect */
 	/* keep default */
 
@@ -948,7 +991,10 @@ static int sgtl5000_init(struct snd_soc_device *socdev)
 	    SGTL5000_DAC_MUTE_RIGHT | SGTL5000_DAC_MUTE_LEFT;
 	sgtl5000_write(codec, SGTL5000_CHIP_ADCDAC_CTRL, reg);
 
-	sgtl5000_write(codec, SGTL5000_CHIP_PAD_STRENGTH, 0x015f);
+	if (cpu_is_mx25())
+		sgtl5000_write(codec, SGTL5000_CHIP_PAD_STRENGTH, 0x01df);
+	else
+		sgtl5000_write(codec, SGTL5000_CHIP_PAD_STRENGTH, 0x015f);
 
 	reg = sgtl5000_read(codec, SGTL5000_CHIP_ANA_ADC_CTRL);
 	reg &= ~SGTL5000_ADC_VOL_M6DB;
@@ -957,7 +1003,8 @@ static int sgtl5000_init(struct snd_soc_device *socdev)
 	    | (0xf << SGTL5000_ADC_VOL_RIGHT_SHIFT);
 	sgtl5000_write(codec, SGTL5000_CHIP_ANA_ADC_CTRL, reg);
 
-	reg = SGTL5000_LINE_OUT_MUTE | SGTL5000_HP_MUTE;
+	reg = SGTL5000_LINE_OUT_MUTE | SGTL5000_HP_MUTE |
+	    SGTL5000_HP_ZCD_EN | SGTL5000_ADC_ZCD_EN;
 	sgtl5000_write(codec, SGTL5000_CHIP_ANA_CTRL, reg);
 
 	sgtl5000_write(codec, SGTL5000_CHIP_MIC_CTRL, 0);

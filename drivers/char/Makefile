@@ -15,6 +15,7 @@ obj-m += chumby_timer.o
 
 obj-$(CONFIG_FM_SI4702)		+= mxc_si4702.o
 obj-$(CONFIG_MXC_IIM)		+= mxc_iim.o
+obj-$(CONFIG_MXS_VIIM)		+= mxs_viim.o
 obj-$(CONFIG_IMX_SIM) 		+= imx_sim.o
 
 obj-$(CONFIG_LEGACY_PTYS)	+= pty.o

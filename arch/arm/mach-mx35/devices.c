@@ -556,6 +556,8 @@ static inline void mxc_init_spdif(void)
 	clk_put(mxc_spdif_data.spdif_clk);
 	mxc_spdif_data.spdif_core_clk = clk_get(NULL, "spdif_clk");
 	clk_put(mxc_spdif_data.spdif_core_clk);
+	mxc_spdif_data.spdif_audio_clk = clk_get(NULL, "spdif_audio_clk");
+	clk_put(mxc_spdif_data.spdif_audio_clk);
 	platform_device_register(&mxc_alsa_spdif_device);
 }
 
@@ -746,6 +748,30 @@ static inline void mxc_init_iim(void)
 }
 #endif
 
+static struct resource mxc_gpu_resources[] = {
+	{
+		.start = MXC_INT_GPU2D,
+		.end = MXC_INT_GPU2D,
+		.name = "gpu_2d_irq",
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device gpu_device = {
+	.name = "mxc_gpu",
+	.id = 0,
+	.dev = {
+		.release = mxc_nop_release,
+		},
+	.num_resources = ARRAY_SIZE(mxc_gpu_resources),
+	.resource = mxc_gpu_resources,
+};
+
+static void __init mxc_init_gpu(void)
+{
+	platform_device_register(&gpu_device);
+}
+
 int __init mxc_init_devices(void)
 {
 	mxc_init_wdt();
@@ -762,6 +788,7 @@ int __init mxc_init_devices(void)
 	mxc_init_flexcan();
 	mxc_init_rngc();
 	mxc_init_iim();
+	mxc_init_gpu();
 
 	/* SPBA configuration for SSI2 - SDMA and MCU are set */
 	spba_take_ownership(SPBA_SSI2, SPBA_MASTER_C | SPBA_MASTER_A);

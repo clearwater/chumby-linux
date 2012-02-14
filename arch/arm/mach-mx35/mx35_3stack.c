@@ -158,7 +158,7 @@ static struct mtd_partition mxc_nand_partitions[] = {
 	{
 	 .name = "nand.rootfs",
 	 .offset = MTDPART_OFS_APPEND,
-	 .size = 96 * 1024 * 1024},
+	 .size = 256 * 1024 * 1024},
 	{
 	 .name = "nand.configure",
 	 .offset = MTDPART_OFS_APPEND,
@@ -336,10 +336,10 @@ struct mxc_unifi_platform_data *get_unifi_plat_data(void)
 EXPORT_SYMBOL(get_unifi_plat_data);
 
 static struct mxc_tsc_platform_data tsc2007_data = {
-	.vdd_reg = "SW1",
+	.vdd_reg = NULL,
 	.penup_threshold = 30,
-	.active = gpio_tsc_active,
-	.inactive = gpio_tsc_inactive,
+	.active = NULL,
+	.inactive = NULL,
 };
 
 static struct mxc_camera_platform_data camera_data = {
@@ -499,7 +499,7 @@ EXPORT_SYMBOL(expio_intr_fec);
 #endif
 
 #if defined(CONFIG_MMC_IMX_ESDHCI) || defined(CONFIG_MMC_IMX_ESDHCI_MODULE)
-static struct mxc_mmc_platform_data mmc0_data = {
+static struct mxc_mmc_platform_data mmc1_data = {
 	.ocr_mask = MMC_VDD_32_33,
 #if defined(CONFIG_SDIO_UNIFI_FS) || defined(CONFIG_SDIO_UNIFI_FS_MODULE)
 	.caps = MMC_CAP_4_BIT_DATA,
@@ -541,14 +541,14 @@ static struct platform_device mxcsdhc1_device = {
 	.id = 0,
 	.dev = {
 		.release = mxc_nop_release,
-		.platform_data = &mmc0_data,
+		.platform_data = &mmc1_data,
 		},
 	.num_resources = ARRAY_SIZE(mxcsdhc1_resources),
 	.resource = mxcsdhc1_resources,
 };
 
 #if defined(CONFIG_SDIO_UNIFI_FS) || defined(CONFIG_SDIO_UNIFI_FS_MODULE)
-static struct mxc_mmc_platform_data mmc1_data = {
+static struct mxc_mmc_platform_data mmc2_data = {
 	.ocr_mask = MMC_VDD_27_28 | MMC_VDD_28_29 | MMC_VDD_29_30 |
 	    MMC_VDD_31_32,
 	.caps = MMC_CAP_4_BIT_DATA,
@@ -583,7 +583,7 @@ static struct platform_device mxcsdhc2_device = {
 	.id = 1,
 	.dev = {
 		.release = mxc_nop_release,
-		.platform_data = &mmc1_data,
+		.platform_data = &mmc2_data,
 		},
 	.num_resources = ARRAY_SIZE(mxcsdhc2_resources),
 	.resource = mxcsdhc2_resources,
@@ -1044,6 +1044,10 @@ static void mx35_3stack_fixup_for_board_v1(void)
 	flexcan_data[0].core_reg = "SW1";
 	flexcan_data[1].core_reg = "SW1";
 #endif
+
+	tsc2007_data.vdd_reg = "SW1";
+	tsc2007_data.active = gpio_tsc_active;
+	tsc2007_data.inactive = gpio_tsc_inactive;
 }
 
 /*!

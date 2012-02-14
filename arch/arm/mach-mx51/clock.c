@@ -342,6 +342,7 @@ static int _clk_pll_set_rate(struct clk *clk, unsigned long rate)
 		__raw_writel(mfn, pllbase + MXC_PLL_DP_HFS_MFN);
 	}
 
+	clk->rate = rate;
 	return 0;
 }
 
@@ -1397,6 +1398,39 @@ static void _clk_ipu_di_recalc(struct clk *clk)
 	}
 }
 
+static int _clk_ipu_di_set_rate(struct clk *clk, unsigned long rate)
+{
+	u32 reg, div;
+
+	div = clk->parent->rate / rate;
+	if (div == 0)
+		div++;
+	if (((clk->parent->rate / div) != rate) || (div > 8))
+		return -EINVAL;
+
+	reg = __raw_readl(MXC_CCM_CDCDR);
+	reg &= ~MXC_CCM_CDCDR_DI_CLK_PRED_MASK;
+	reg |= (div - 1) << MXC_CCM_CDCDR_DI_CLK_PRED_OFFSET;
+	__raw_writel(reg, MXC_CCM_CDCDR);
+
+	clk->rate = rate;
+
+	return 0;
+}
+
+static unsigned long _clk_ipu_di_round_rate(struct clk *clk,
+					    unsigned long rate)
+{
+	u32 div;
+
+	div = clk->parent->rate / rate;
+	if (div > 8)
+		div = 8;
+	else if (div == 0)
+		div++;
+	return clk->parent->rate / div;
+}
+
 static struct clk ipu_di_clk[] = {
 	{
 	.name = "ipu_di0_clk",
@@ -1406,6 +1440,8 @@ static struct clk ipu_di_clk[] = {
 	.enable_shift = MXC_CCM_CCGR6_CG5_OFFSET,
 	.recalc = _clk_ipu_di_recalc,
 	.set_parent = _clk_ipu_di_set_parent,
+	.round_rate = _clk_ipu_di_round_rate,
+	.set_rate = _clk_ipu_di_set_rate,
 	.enable = _clk_enable,
 	.disable = _clk_disable,
 	},
@@ -1417,6 +1453,8 @@ static struct clk ipu_di_clk[] = {
 	.enable_shift = MXC_CCM_CCGR6_CG6_OFFSET,
 	.recalc = _clk_ipu_di_recalc,
 	.set_parent = _clk_ipu_di_set_parent,
+	.round_rate = _clk_ipu_di_round_rate,
+	.set_rate = _clk_ipu_di_set_rate,
 	.enable = _clk_enable,
 	.disable = _clk_disable,
 	},
@@ -1878,7 +1916,7 @@ static struct clk gpt_clk[] = {
 
 static struct clk pwm1_clk[] = {
 	{
-	 .name = "pwm_clk",
+	 .name = "pwm",
 	 .parent = &ipg_perclk,
 	 .id = 0,
 	 .enable_reg = MXC_CCM_CCGR2,
@@ -1905,7 +1943,7 @@ static struct clk pwm1_clk[] = {
 
 static struct clk pwm2_clk[] = {
 	{
-	 .name = "pwm_clk",
+	 .name = "pwm",
 	 .parent = &ipg_perclk,
 	 .id = 1,
 	 .enable_reg = MXC_CCM_CCGR2,
@@ -2412,22 +2450,21 @@ static struct clk usboh3_clk[] = {
 	 .enable_shift = MXC_CCM_CCGR2_CG14_OFFSET,
 	 .disable = _clk_disable,
 	 .secondary = &usboh3_clk[1],
-	 .flags = AHB_HIGH_SET_POINT | CPU_FREQ_TRIG_UPDATE,
-	 },
-	{
-	 .name = "usb_ahb_clk",
-	 .parent = &ipg_clk,
-	 .enable = _clk_enable,
-	 .enable_reg = MXC_CCM_CCGR2,
-	 .enable_shift = MXC_CCM_CCGR2_CG13_OFFSET,
-	 .disable = _clk_disable,
-	 .secondary = &usboh3_clk[2],
+	 .flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE,
 	 },
 	{
 	 .name = "usb_sec_clk",
 	 .parent = &tmax2_clk,
 	 .secondary = &emi_fast_clk,
 	 },
+};
+static struct clk usb_ahb_clk = {
+	 .name = "usb_ahb_clk",
+	 .parent = &ipg_clk,
+	 .enable = _clk_enable,
+	 .enable_reg = MXC_CCM_CCGR2,
+	 .enable_shift = MXC_CCM_CCGR2_CG13_OFFSET,
+	 .disable = _clk_disable,
 };
 
 static void _clk_usb_phy_recalc(struct clk *clk)
@@ -2799,12 +2836,38 @@ static unsigned long _clk_nfc_round_rate(struct clk *clk,
 {
 	u32 div;
 
+	/*
+	 * Compute the divider we'd have to use to reach the target rate.
+	 */
+
 	div = clk->parent->rate / rate;
-	if (div > 8)
-		div = 8;
-	else if (div == 0)
+
+	/*
+	 * If there's a remainder after the division, then we have to increment
+	 * the divider. There are two reasons for this:
+	 *
+	 * 1) The frequency we round to must be LESS THAN OR EQUAL to the
+	 *    target. We aren't allowed to round to a frequency that is higher
+	 *    than the target.
+	 *
+	 * 2) This also catches the case where target rate is less than the
+	 *    parent rate, which implies a divider of zero. We can't allow a
+	 *    divider of zero.
+	 */
+
+	if (clk->parent->rate % rate)
 		div++;
+
+	/*
+	 * The divider for this clock is 3 bits wide, so we can't possibly
+	 * divide the parent by more than eight.
+	 */
+
+	if (div > 8)
+		return -EINVAL;
+
 	return clk->parent->rate / div;
+
 }
 
 static int _clk_nfc_set_rate(struct clk *clk, unsigned long rate)
@@ -3362,7 +3425,7 @@ static struct clk *mxc_clks[] = {
 	&tmax3_clk,
 	&usboh3_clk[0],
 	&usboh3_clk[1],
-	&usboh3_clk[2],
+	&usb_ahb_clk,
 	&usb_phy_clk,
 	&usb_utmi_clk,
 	&usb_clk,
@@ -3488,16 +3551,6 @@ int __init mxc_clocks_init(unsigned long ckil, unsigned long osc, unsigned long 
 	int i = 0, j = 0, reg;
 	int wp_cnt = 0;
 
-	ckil_clk.rate = ckil;
-	osc_clk.rate = osc;
-	ckih_clk.rate = ckih1;
-	ckih2_clk.rate = ckih2;
-
-	clk_tree_init();
-
-	for (clkp = mxc_clks; clkp < mxc_clks + ARRAY_SIZE(mxc_clks); clkp++)
-		clk_register(*clkp);
-
 	/* Turn off all possible clocks */
 	if (mxc_jtag_enabled) {
 		__raw_writel(1 << MXC_CCM_CCGR0_CG0_OFFSET |
@@ -3527,6 +3580,7 @@ int __init mxc_clocks_init(unsigned long ckil, unsigned long osc, unsigned long 
 	__raw_writel(1 << MXC_CCM_CCGR4_CG8_OFFSET, MXC_CCM_CCGR4);
 
 	__raw_writel(1 << MXC_CCM_CCGR5_CG2_OFFSET |
+		     3 << MXC_CCM_CCGR5_CG6_OFFSET |
 		     1 << MXC_CCM_CCGR5_CG7_OFFSET |
 		     1 << MXC_CCM_CCGR5_CG8_OFFSET |
 		     3 << MXC_CCM_CCGR5_CG9_OFFSET |
@@ -3534,6 +3588,16 @@ int __init mxc_clocks_init(unsigned long ckil, unsigned long osc, unsigned long 
 		     3 << MXC_CCM_CCGR5_CG11_OFFSET, MXC_CCM_CCGR5);
 
 	__raw_writel(1 << MXC_CCM_CCGR6_CG4_OFFSET, MXC_CCM_CCGR6);
+
+	ckil_clk.rate = ckil;
+	osc_clk.rate = osc;
+	ckih_clk.rate = ckih1;
+	ckih2_clk.rate = ckih2;
+
+	clk_tree_init();
+
+	for (clkp = mxc_clks; clkp < mxc_clks + ARRAY_SIZE(mxc_clks); clkp++)
+		clk_register(*clkp);
 
 	/*Setup the LPM bypass bits */
 	reg = __raw_readl(MXC_CCM_CLPCR);
@@ -3571,8 +3635,8 @@ int __init mxc_clocks_init(unsigned long ckil, unsigned long osc, unsigned long 
 		clk_set_parent(&vpu_clk[1], &axi_a_clk);
 	}
 
-	clk_set_parent(&gpu3d_clk, &ahb_clk);
-	clk_set_parent(&gpu2d_clk, &ahb_clk);
+	clk_set_parent(&gpu3d_clk, &axi_a_clk);
+	clk_set_parent(&gpu2d_clk, &axi_a_clk);
 
 	/* move cspi to 24MHz */
 	clk_set_parent(&cspi_main_clk, &lp_apm_clk);
@@ -3614,6 +3678,18 @@ int __init mxc_clocks_init(unsigned long ckil, unsigned long osc, unsigned long 
 	/* Change the SSI_EXT1_CLK to be sourced from SSI1_CLK_ROOT */
 	clk_set_parent(&ssi_ext1_clk, &ssi1_clk[0]);
 	clk_set_parent(&ssi_ext2_clk, &ssi2_clk[0]);
+
+	/* move usb_phy_clk to 24MHz */
+	clk_set_parent(&usb_phy_clk, &osc_clk);
+
+	/* set usboh3_clk to pll2 */
+	clk_set_parent(&usboh3_clk, &pll2_sw_clk);
+	reg = __raw_readl(MXC_CCM_CSCDR1);
+	reg &= ~MXC_CCM_CSCDR1_USBOH3_CLK_PODF_MASK;
+	reg &= ~MXC_CCM_CSCDR1_USBOH3_CLK_PRED_MASK;
+	reg |= 4 << MXC_CCM_CSCDR1_USBOH3_CLK_PRED_OFFSET;
+	reg |= 1 << MXC_CCM_CSCDR1_USBOH3_CLK_PODF_OFFSET;
+	__raw_writel(reg, MXC_CCM_CSCDR1);
 
 	/* Set the current working point. */
 	cpu_wp_tbl = get_cpu_wp(&cpu_wp_nr);
@@ -3692,14 +3768,7 @@ int __init mxc_clocks_init(unsigned long ckil, unsigned long osc, unsigned long 
 
 	clk_set_parent(&arm_axi_clk, &axi_a_clk);
 	clk_set_parent(&ipu_clk[0], &axi_b_clk);
-
-	/* set the UART dividers to divide by 3*/
-	reg = __raw_readl(MXC_CCM_CSCDR1);
-	reg &= ~MXC_CCM_CSCDR1_UART_CLK_PODF_MASK;
-	reg &= ~MXC_CCM_CSCDR1_UART_CLK_PRED_MASK;
-	reg |= 2 << MXC_CCM_CSCDR1_UART_CLK_PRED_OFFSET;
-	__raw_writel(reg, MXC_CCM_CSCDR1);
-	clk_set_parent(&uart_main_clk, &pll3_sw_clk);
+	clk_set_parent(&uart_main_clk, &pll2_sw_clk);
 
 	clk_set_parent(&emi_slow_clk, &ahb_clk);
 	clk_set_rate(&emi_slow_clk, clk_round_rate(&emi_slow_clk, 130000000));

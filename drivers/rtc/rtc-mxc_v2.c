@@ -170,21 +170,13 @@ static DEFINE_SPINLOCK(rtc_lock);
  */
 static inline void rtc_write_sync_lp(void __iomem *ioaddr)
 {
-	while ((__raw_readl(ioaddr + SRTC_HPISR) & SRTC_ISR_WPLP) != 0)
-		msleep(1);
-	while ((__raw_readl(ioaddr + SRTC_HPISR) & SRTC_ISR_WDLP) == 0)
-		msleep(1);
-	__raw_writel(SRTC_ISR_WDLP, ioaddr + SRTC_HPISR);
-	while ((__raw_readl(ioaddr + SRTC_HPISR) & SRTC_ISR_WPHP) != 0)
-		msleep(1);
-}
-
-static inline void rtc_write_sync_lp_no_wait(void __iomem *ioaddr)
-{
-	while ((__raw_readl(ioaddr + SRTC_HPISR) & SRTC_ISR_WPLP) != 0);
-	while ((__raw_readl(ioaddr + SRTC_HPISR) & SRTC_ISR_WDLP) == 0);
-	__raw_writel(SRTC_ISR_WDLP, ioaddr + SRTC_HPISR);
-	while ((__raw_readl(ioaddr + SRTC_HPISR) & SRTC_ISR_WPHP) != 0);
+	unsigned int i, count;
+	/* Wait for 3 CKIL cycles */
+	for (i = 0; i < 3; i++) {
+		count = __raw_readl(ioaddr + SRTC_LPSCLR);
+		while
+			((__raw_readl(ioaddr + SRTC_LPSCLR)) == count);
+	}
 }
 
 /*!
@@ -282,6 +274,9 @@ static irqreturn_t mxc_rtc_interrupt(int irq, void *dev_id)
  */
 static int mxc_rtc_open(struct device *dev)
 {
+	struct rtc_drv_data *pdata = dev_get_drvdata(dev);
+	clk_enable(pdata->clk);
+
 	if (test_and_set_bit(1, &rtc_status))
 		return -EBUSY;
 	return 0;
@@ -306,6 +301,9 @@ static void mxc_rtc_release(struct device *dev)
 	__raw_writel(0xFFFFFFFF, ioaddr + SRTC_LPSR);
 
 	spin_unlock_irqrestore(&rtc_lock, lock_flags);
+
+	clk_disable(pdata->clk);
+
 	rtc_status = 0;
 }
 
@@ -484,9 +482,11 @@ static int mxc_rtc_proc(struct device *dev, struct seq_file *seq)
 	struct rtc_drv_data *pdata = dev_get_drvdata(dev);
 	void __iomem *ioaddr = pdata->ioaddr;
 
+	clk_enable(pdata->clk);
 	seq_printf(seq, "alarm_IRQ\t: %s\n",
 		   (((__raw_readl(ioaddr + SRTC_LPCR)) & SRTC_LPCR_ALP) !=
 		    0) ? "yes" : "no");
+	clk_disable(pdata->clk);
 
 	return 0;
 }
@@ -559,11 +559,11 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 
 	/* initialize glitch detect */
 	__raw_writel(SRTC_LPPDR_INIT, ioaddr + SRTC_LPPDR);
-	rtc_write_sync_lp_no_wait(ioaddr);
+	udelay(100);
 
 	/* clear lp interrupt status */
 	__raw_writel(0xFFFFFFFF, ioaddr + SRTC_LPSR);
-	rtc_write_sync_lp_no_wait(ioaddr);
+	udelay(100);;
 
 	plat_data = (struct mxc_srtc_platform_data *)pdev->dev.platform_data;
 	clk = clk_get(NULL, "iim_clk");
@@ -575,13 +575,13 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 	    SRTC_SECMODE_LOW) && (cpu_is_mx51_rev(CHIP_REV_1_0) == 1)) {
 		/* Workaround for MX51 TO1 due to inaccurate CKIL clock */
 		__raw_writel(SRTC_LPCR_EN_LP, ioaddr + SRTC_LPCR);
-		rtc_write_sync_lp_no_wait(ioaddr);
+		udelay(100);
 	} else {
 		/* move out of init state */
 		__raw_writel((SRTC_LPCR_IE | SRTC_LPCR_NSA),
 			     ioaddr + SRTC_LPCR);
 
-		rtc_write_sync_lp_no_wait(ioaddr);
+		udelay(100);
 
 		while ((__raw_readl(ioaddr + SRTC_LPSR) & SRTC_LPSR_IES) == 0);
 
@@ -589,12 +589,12 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 		__raw_writel((SRTC_LPCR_IE | SRTC_LPCR_NVE | SRTC_LPCR_NSA |
 			      SRTC_LPCR_EN_LP), ioaddr + SRTC_LPCR);
 
-		rtc_write_sync_lp_no_wait(ioaddr);
+		udelay(100);
 
 		while ((__raw_readl(ioaddr + SRTC_LPSR) & SRTC_LPSR_NVES) == 0);
 
 		__raw_writel(0xFFFFFFFF, ioaddr + SRTC_LPSR);
-		rtc_write_sync_lp_no_wait(ioaddr);
+		udelay(100);
 	}
 	clk_disable(clk);
 	clk_put(clk);
@@ -615,6 +615,8 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 	/* By default, devices should wakeup if they can */
 	/* So srtc is set as "should wakeup" as it can */
 	device_init_wakeup(&pdev->dev, 1);
+
+	clk_disable(pdata->clk);
 
 	return ret;
 
@@ -637,7 +639,6 @@ static int __exit mxc_rtc_remove(struct platform_device *pdev)
 	clk_disable(pdata->clk);
 	clk_put(pdata->clk);
 	kfree(pdata);
-	mxc_rtc_release(NULL);
 	return 0;
 }
 
@@ -658,6 +659,7 @@ static int mxc_rtc_suspend(struct platform_device *pdev, pm_message_t state)
 	void __iomem *ioaddr = pdata->ioaddr;
 	struct timespec tv;
 
+	clk_enable(pdata->clk);
 	if (device_may_wakeup(&pdev->dev)) {
 		enable_irq_wake(pdata->irq);
 	} else {
@@ -716,6 +718,7 @@ static int mxc_rtc_resume(struct platform_device *pdev)
 		do_settimeofday(&ts);
 	}
 
+	clk_disable(pdata->clk);
 	return 0;
 }
 

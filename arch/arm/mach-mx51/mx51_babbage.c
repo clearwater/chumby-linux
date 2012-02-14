@@ -50,6 +50,7 @@
 #include "board-mx51_babbage.h"
 #include "iomux.h"
 #include "crm_regs.h"
+#include <mach/mxc_edid.h>
 
 /*!
  * @file mach-mx51/mx51_babbage.c
@@ -82,7 +83,7 @@ static struct cpu_wp cpu_wp_auto[] = {
 	 .mfd = 2,
 	 .mfn = 1,
 	 .cpu_podf = 0,
-	 .cpu_voltage = 1050000,},
+	 .cpu_voltage = 1100000,},
 	{
 	 .pll_rate = 800000000,
 	 .cpu_rate = 166250000,
@@ -91,7 +92,28 @@ static struct cpu_wp cpu_wp_auto[] = {
 	 .mfd = 2,
 	 .mfn = 1,
 	 .cpu_podf = 4,
-	 .cpu_voltage = 775000,},
+	 .cpu_voltage = 1000000,},
+};
+
+static struct fb_videomode video_modes[] = {
+	{
+	 /* 720p60 TV output */
+	 "720P60", 60, 1280, 720, 7418,
+	 220, 110,
+	 20, 5,
+	 40, 5,
+	 FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT | FB_SYNC_EXT,
+	 FB_VMODE_NONINTERLACED,
+	 0,},
+	{
+	 /* MITSUBISHI LVDS panel */
+	 "XGA", 60, 1024, 768, 15385,
+	 220, 40,
+	 21, 7,
+	 60, 10,
+	 0,
+	 FB_VMODE_NONINTERLACED,
+	 0,},
 };
 
 struct cpu_wp *mx51_babbage_get_cpu_wp(int *wp)
@@ -109,6 +131,53 @@ static void mxc_nop_release(struct device *dev)
 {
 	/* Nothing */
 }
+
+#if defined(CONFIG_KEYBOARD_MXC) || defined(CONFIG_KEYBOARD_MXC_MODULE)
+static u16 keymapping[24] = {
+	KEY_1, KEY_2, KEY_3, KEY_F1, KEY_UP, KEY_F2,
+	KEY_4, KEY_5, KEY_6, KEY_LEFT, KEY_SELECT, KEY_RIGHT,
+	KEY_7, KEY_8, KEY_9, KEY_F3, KEY_DOWN, KEY_F4,
+	KEY_0, KEY_OK, KEY_ESC, KEY_ENTER, KEY_MENU, KEY_BACK,
+};
+
+static struct resource mxc_kpp_resources[] = {
+	[0] = {
+	       .start = MXC_INT_KPP,
+	       .end = MXC_INT_KPP,
+	       .flags = IORESOURCE_IRQ,
+	       }
+};
+
+static struct keypad_data keypad_plat_data = {
+	.rowmax = 4,
+	.colmax = 6,
+	.irq = MXC_INT_KPP,
+	.learning = 0,
+	.delay = 2,
+	.matrix = keymapping,
+};
+
+/* mxc keypad driver */
+static struct platform_device mxc_keypad_device = {
+	.name = "mxc_keypad",
+	.id = 0,
+	.num_resources = ARRAY_SIZE(mxc_kpp_resources),
+	.resource = mxc_kpp_resources,
+	.dev = {
+		.release = mxc_nop_release,
+		.platform_data = &keypad_plat_data,
+		},
+};
+
+static void mxc_init_keypad(void)
+{
+	(void)platform_device_register(&mxc_keypad_device);
+}
+#else
+static inline void mxc_init_keypad(void)
+{
+}
+#endif
 
 #if defined(CONFIG_FB_MXC_SYNC_PANEL) || \
 	defined(CONFIG_FB_MXC_SYNC_PANEL_MODULE)
@@ -138,6 +207,8 @@ static struct platform_device mxc_fb_device[] = {
 		 .coherent_dma_mask = 0xFFFFFFFF,
 		 .platform_data = &fb_data[0],
 		 },
+	 .num_resources = ARRAY_SIZE(mxcfb_resources),
+	 .resource = mxcfb_resources,
 	 },
 	{
 	 .name = "mxc_sdc_fb",
@@ -160,6 +231,8 @@ static struct platform_device mxc_fb_device[] = {
 
 static int __initdata enable_vga = { 0 };
 static int __initdata enable_wvga = { 0 };
+static int __initdata enable_tv = { 0 };
+static int __initdata enable_mitsubishi_xga = { 0 };
 
 static void wvga_reset(void)
 {
@@ -178,8 +251,99 @@ static struct platform_device lcd_wvga_device = {
 		},
 };
 
-static void __init mxc_init_fb(void)
+static int handle_edid(int *pixclk)
 {
+	int err = 0;
+	int dvi = 0;
+	int fb0 = 0;
+	int fb1 = 1;
+	struct fb_var_screeninfo screeninfo;
+	struct i2c_adapter *adp;
+
+	memset(&screeninfo, 0, sizeof(screeninfo));
+
+	adp = i2c_get_adapter(1);
+
+	if (cpu_is_mx51_rev(CHIP_REV_3_0) > 0) {
+		mxc_set_gpio_dataout(MX51_PIN_CSI2_HSYNC, 1);
+		msleep(1);
+	}
+	err = read_edid(adp, &screeninfo, &dvi);
+	if (cpu_is_mx51_rev(CHIP_REV_3_0) > 0)
+		mxc_set_gpio_dataout(MX51_PIN_CSI2_HSYNC, 0);
+
+	if (!err) {
+		printk(KERN_INFO " EDID read\n");
+		if (!dvi) {
+			enable_vga = 1;
+			fb0 = 1; /* fb0 will be VGA */
+			fb1 = 0; /* fb1 will be DVI or TV */
+		}
+
+		/* Handle TV modes */
+		/* This logic is fairly complex yet still doesn't handle all
+		   possibilities.  Once a customer knows the platform
+		   configuration, this should be simplified to what is desired.
+		 */
+		if (screeninfo.xres == 1920 && screeninfo.yres != 1200) {
+			/* MX51 can't handle clock speeds for anything larger.*/
+			if (!enable_tv)
+				enable_tv = 1;
+			if (enable_vga || enable_wvga || enable_tv == 2)
+				enable_tv = 2;
+			fb_data[0].mode = &(video_modes[0]);
+			if (!enable_wvga)
+				fb_data[1].mode_str = "800x600M-16@60";
+		} else if (screeninfo.xres > 1280 && screeninfo.yres > 1024) {
+			if (!enable_wvga) {
+				fb_data[fb0].mode_str = "1280x1024M-16@60";
+				fb_data[fb1].mode_str = NULL;
+			} else {
+				/* WVGA is preset so the DVI can't be > this. */
+				fb_data[0].mode_str = "1024x768M-16@60";
+			}
+		} else if (screeninfo.xres > 0 && screeninfo.yres > 0) {
+			if (!enable_wvga) {
+				fb_data[fb0].mode =
+					kzalloc(sizeof(struct fb_videomode),
+							GFP_KERNEL);
+				fb_var_to_videomode(fb_data[fb0].mode,
+						    &screeninfo);
+				fb_data[fb0].mode_str = NULL;
+				if (screeninfo.xres >= 1280 &&
+						screeninfo.yres > 720)
+					fb_data[fb1].mode_str = NULL;
+				else if (screeninfo.xres > 1024 &&
+						screeninfo.yres > 768)
+					fb_data[fb1].mode_str =
+						"800x600M-16@60";
+				else if (screeninfo.xres > 800 &&
+						screeninfo.yres > 600)
+					fb_data[fb1].mode_str =
+						"1024x768M-16@60";
+			} else {
+				/* A WVGA panel was specified and an EDID was
+				   read thus there is a DVI monitor attached. */
+				if (screeninfo.xres >= 1024)
+					fb_data[0].mode_str = "1024x768M-16@60";
+				else if (screeninfo.xres >= 800)
+					fb_data[0].mode_str = "800x600M-16@60";
+				else
+					fb_data[0].mode_str = "640x480M-16@60";
+			}
+		}
+	}
+
+	return 0;
+}
+
+static int __init mxc_init_fb(void)
+{
+	int pixclk = 0;
+
+	if (!machine_is_mx51_babbage())
+		return 0;
+
 	if (cpu_is_mx51_rev(CHIP_REV_1_1) == 1) {
 		enable_vga = 1;
 		fb_data[0].mode_str = NULL;
@@ -187,8 +351,20 @@ static void __init mxc_init_fb(void)
 	}
 
 	if (enable_wvga) {
-		fb_data[1].interface_pix_fmt = IPU_PIX_FMT_RGB666;
+		fb_data[1].interface_pix_fmt = IPU_PIX_FMT_RGB565;
 		fb_data[1].mode_str = "800x480M-16@55";
+	}
+
+	if (enable_mitsubishi_xga) {
+		fb_data[0].interface_pix_fmt = IPU_PIX_FMT_LVDS666;
+		fb_data[0].mode = &(video_modes[1]);
+
+		mxc_set_gpio_dataout(MX51_PIN_DI1_D0_CS, 0);
+		msleep(1);
+		mxc_set_gpio_dataout(MX51_PIN_DI1_D0_CS, 1);
+
+		mxc_set_gpio_dataout(MX51_PIN_CSI2_D12, 1);
+		mxc_set_gpio_dataout(MX51_PIN_CSI2_D13, 1);
 	}
 
 	/* DVI Detect */
@@ -202,12 +378,59 @@ static void __init mxc_init_fb(void)
 
 	(void)platform_device_register(&lcd_wvga_device);
 
-	if (!enable_vga && !enable_wvga)
-		(void)platform_device_register(&mxc_fb_device[0]);
-	else
-		(void)platform_device_register(&mxc_fb_device[1]);
+#if 0
+	if (cpu_is_mx51_rev(CHIP_REV_1_1) == 2)
+		handle_edid(&pixclk);
+#endif
+
+	if (enable_vga)
+		printk(KERN_INFO "VGA monitor is primary\n");
+	else if (enable_wvga)
+		printk(KERN_INFO "WVGA LCD panel is primary\n");
+	else if (!enable_tv)
+		printk(KERN_INFO "DVI monitor is primary\n");
+
+	if (enable_tv) {
+		printk(KERN_INFO "TV is specified as %d\n", enable_tv);
+		if (!fb_data[0].mode) {
+			fb_data[0].mode = &(video_modes[0]);
+			if (!enable_wvga)
+				fb_data[1].mode_str = "800x600M-16@60";
+		}
+	}
+
+	if (enable_tv) {
+		struct clk *clk, *di_clk;
+		clk = clk_get(NULL, "pll3");
+		di_clk = clk_get(NULL, "ipu_di0_clk");
+		clk_disable(clk);
+		clk_disable(di_clk);
+		clk_set_rate(clk, 297000000);
+		clk_set_rate(di_clk, 297000000 / 4);
+		clk_enable(clk);
+		clk_enable(di_clk);
+		clk_put(di_clk);
+		clk_put(clk);
+	}
+
+	/* Once a customer knows the platform configuration,
+	   this should be simplified to what is desired.
+	 */
+	if (enable_vga || enable_wvga || enable_tv == 2) {
+		(void)platform_device_register(&mxc_fb_device[1]); /* VGA */
+		if (fb_data[0].mode_str || fb_data[0].mode)
+			(void)platform_device_register(&mxc_fb_device[0]);
+	} else {
+		(void)platform_device_register(&mxc_fb_device[0]); /* DVI */
+		if (fb_data[1].mode_str || fb_data[1].mode)
+			(void)platform_device_register(&mxc_fb_device[1]);
+	}
+
 	(void)platform_device_register(&mxc_fb_device[2]);
+
+	return 0;
 }
+device_initcall(mxc_init_fb);
 
 static int __init vga_setup(char *__unused)
 {
@@ -224,20 +447,29 @@ static int __init wvga_setup(char *__unused)
 }
 
 __setup("wvga", wvga_setup);
+
+static int __init mitsubishi_xga_setup(char *__unused)
+{
+	enable_mitsubishi_xga = 1;
+	return 1;
+}
+
+__setup("mitsubishi_xga", mitsubishi_xga_setup);
+
+static int __init tv_setup(char *s)
+{
+	enable_tv = 1;
+	if (strcmp(s, "2") == 0 || strcmp(s, "=2") == 0)
+		enable_tv = 2;
+	return 1;
+}
+
+__setup("tv", tv_setup);
 #else
 static inline void mxc_init_fb(void)
 {
 }
 #endif
-
-static struct platform_device mxcbl_device = {
-	.name = "mxc_mc13892_bl",
-};
-
-static inline void mxc_init_bl(void)
-{
-	platform_device_register(&mxcbl_device);
-}
 
 static void dvi_reset(void)
 {
@@ -312,7 +544,19 @@ static struct mxc_fm_platform_data si4702_data = {
 #if defined(CONFIG_I2C_MXC) || defined(CONFIG_I2C_MXC_MODULE)
 
 #ifdef CONFIG_I2C_MXC_SELECT1
+static struct mxc_camera_platform_data camera_data = {
+	.io_regulator = "SW4",
+	.analog_regulator = "VIOHI",
+	.mclk = 24000000,
+	.csi = 0,
+};
+
 static struct i2c_board_info mxc_i2c0_board_info[] __initdata = {
+	{
+	.type = "ov3640",
+	.addr = 0x3C,
+	.platform_data = (void *)&camera_data,
+	},
 };
 #endif
 #ifdef CONFIG_I2C_MXC_SELECT2
@@ -347,35 +591,62 @@ static struct i2c_board_info mxc_i2c_hs_board_info[] __initdata = {
 #endif
 
 #if defined(CONFIG_MTD) || defined(CONFIG_MTD_MODULE)
-static struct mtd_partition mxc_spi_flash_partitions[] = {
+static struct mtd_partition mxc_spi_nor_partitions[] = {
 	{
-		.name = "bootloader",
-		.offset = 0,
-		.size = 0x00040000,
-		.mask_flags = MTD_CAP_ROM},
+	 .name = "bootloader",
+	 .offset = 0,
+	 .size = 0x00040000,},
 	{
-		.name = "kernel",
-		.offset = MTDPART_OFS_APPEND,
-		.size = MTDPART_SIZ_FULL},
+	 .name = "kernel",
+	 .offset = MTDPART_OFS_APPEND,
+	 .size = MTDPART_SIZ_FULL,},
+
 };
 
-static struct flash_platform_data mxc_spi_flash_data = {
-	.name = "mxc_spi_nor",
-	.parts = mxc_spi_flash_partitions,
-	.nr_parts = ARRAY_SIZE(mxc_spi_flash_partitions),
-	.type = "sst25vf016b",
+static struct mtd_partition mxc_dataflash_partitions[] = {
+	{
+	 .name = "bootloader",
+	 .offset = 0,
+	 .size = 0x000100000,},
+	{
+	 .name = "kernel",
+	 .offset = MTDPART_OFS_APPEND,
+	 .size = MTDPART_SIZ_FULL,},
+};
+
+static struct flash_platform_data mxc_spi_flash_data[] = {
+	{
+	 .name = "mxc_spi_nor",
+	 .parts = mxc_spi_nor_partitions,
+	 .nr_parts = ARRAY_SIZE(mxc_spi_nor_partitions),
+	 .type = "sst25vf016b",},
+	{
+	 .name = "mxc_dataflash",
+	 .parts = mxc_dataflash_partitions,
+	 .nr_parts = ARRAY_SIZE(mxc_dataflash_partitions),
+	 .type = "at45db321d",}
 };
 #endif
 
-static struct spi_board_info mxc_spi_board_info[] __initdata = {
+static struct spi_board_info mxc_spi_nor_device[] __initdata = {
 #if defined(CONFIG_MTD) || defined(CONFIG_MTD_MODULE)
 	{
 	 .modalias = "mxc_spi_nor",
-	 .max_speed_hz = 25000000, /* max spi clock (SCK) speed in HZ */
+	 .max_speed_hz = 25000000,	/* max spi clock (SCK) speed in HZ */
 	 .bus_num = 1,
 	 .chip_select = 1,
-	 .platform_data = &mxc_spi_flash_data,
-	},
+	 .platform_data = &mxc_spi_flash_data[0],},
+#endif
+};
+
+static struct spi_board_info mxc_dataflash_device[] __initdata = {
+#if defined(CONFIG_MTD) || defined(CONFIG_MTD_MODULE)
+	{
+	 .modalias = "mxc_dataflash",
+	 .max_speed_hz = 25000000,	/* max spi clock (SCK) speed in HZ */
+	 .bus_num = 1,
+	 .chip_select = 1,
+	 .platform_data = &mxc_spi_flash_data[1],},
 #endif
 };
 
@@ -416,7 +687,7 @@ static unsigned int sdhc_get_card_det_status(struct device *dev)
 	}
 }
 
-static struct mxc_mmc_platform_data mmc_data = {
+static struct mxc_mmc_platform_data mmc1_data = {
 	.ocr_mask = MMC_VDD_31_32,
 	.caps = MMC_CAP_4_BIT_DATA,
 	.min_clk = 400000,
@@ -426,6 +697,18 @@ static struct mxc_mmc_platform_data mmc_data = {
 	.wp_status = sdhc_write_protect,
 	.clock_mmc = "esdhc_clk",
 	.power_mmc = NULL,
+};
+
+static struct mxc_mmc_platform_data mmc2_data = {
+	.ocr_mask = MMC_VDD_27_28 | MMC_VDD_28_29 | MMC_VDD_29_30 |
+	    MMC_VDD_31_32,
+	.caps = MMC_CAP_4_BIT_DATA,
+	.min_clk = 150000,
+	.max_clk = 50000000,
+	.card_inserted_state = 0,
+	.status = sdhc_get_card_det_status,
+	.wp_status = sdhc_write_protect,
+	.clock_mmc = "esdhc_clk",
 };
 
 /*!
@@ -476,7 +759,7 @@ static struct platform_device mxcsdhc1_device = {
 	.id = 0,
 	.dev = {
 		.release = mxc_nop_release,
-		.platform_data = &mmc_data,
+		.platform_data = &mmc1_data,
 		},
 	.num_resources = ARRAY_SIZE(mxcsdhc1_resources),
 	.resource = mxcsdhc1_resources,
@@ -488,7 +771,7 @@ static struct platform_device mxcsdhc2_device = {
 	.id = 1,
 	.dev = {
 		.release = mxc_nop_release,
-		.platform_data = &mmc_data,
+		.platform_data = &mmc2_data,
 		},
 	.num_resources = ARRAY_SIZE(mxcsdhc2_resources),
 	.resource = mxcsdhc2_resources,
@@ -618,6 +901,8 @@ static inline void mxc_init_gpio_button(void)
 static void __init fixup_mxc_board(struct machine_desc *desc, struct tag *tags,
 				   char **cmdline, struct meminfo *mi)
 {
+	char *str;
+	int size = SZ_512M - SZ_32M;
 	struct tag *t;
 
 	mxc_cpu_init();
@@ -626,12 +911,24 @@ static void __init fixup_mxc_board(struct machine_desc *desc, struct tag *tags,
 	set_num_cpu_wp = mx51_babbage_set_num_cpu_wp;
 
 	for_each_tag(t, tags) {
+		if (t->hdr.tag != ATAG_CMDLINE)
+			continue;
+		str = t->u.cmdline.cmdline;
+		str = strstr(str, "mem=");
+		if (str != NULL) {
+			str += 4;
+			size = memparse(str, &str);
+			if (size == 0 || size == SZ_512M)
+				return;
+		}
+	}
+
+	for_each_tag(t, tags) {
 		if (t->hdr.tag != ATAG_MEM)
 			continue;
 
-		if (t->u.mem.size == SZ_512M)
-			t->u.mem.size -= SZ_32M;
-		mxcfb_resources[0].start = t->u.mem.start + t->u.mem.size;
+		t->u.mem.size = size;
+		mxcfb_resources[0].start = t->u.mem.start + size;
 		mxcfb_resources[0].end = t->u.mem.start + SZ_512M - 1;
 	}
 }
@@ -691,14 +988,19 @@ static void __init mxc_board_init(void)
 
 	mxc_init_devices();
 
-	mxc_init_fb();
-	mxc_init_bl();
+	mxc_init_keypad();
 	mxc_init_mmc();
 	mxc_init_gpio_button();
 	mx51_babbage_init_mc13892();
 
-	spi_register_board_info(mxc_spi_board_info,
-				ARRAY_SIZE(mxc_spi_board_info));
+	if (board_is_babbage_2_5() == 1)
+		/* BB2.5 */
+		spi_register_board_info(mxc_dataflash_device,
+					ARRAY_SIZE(mxc_dataflash_device));
+	else
+		/* BB2.0 */
+		spi_register_board_info(mxc_spi_nor_device,
+					ARRAY_SIZE(mxc_spi_nor_device));
 
 #if defined(CONFIG_I2C_MXC) || defined(CONFIG_I2C_MXC_MODULE)
 

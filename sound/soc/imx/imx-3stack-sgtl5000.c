@@ -399,11 +399,10 @@ static int sgtl5000_set_spk(struct snd_kcontrol *kcontrol,
 		return 0;
 
 	sgtl5000_spk_func = ucontrol->value.enumerated.item[0];
-	if (sgtl5000_spk_func) {
+	if (sgtl5000_spk_func)
 		snd_soc_dapm_enable_pin(codec, "Ext Spk");
-	} else {
+	else
 		snd_soc_dapm_disable_pin(codec, "Ext Spk");
-	}
 
 	snd_soc_dapm_sync(codec);
 	return 1;

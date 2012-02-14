@@ -93,12 +93,29 @@ static u32 adc_regmap[] = {
 	HW_AUDIOIN_DATA_ADDR,
 };
 
+static u16 stmp378x_audio_regs[ADC_REGNUM];
+
+static u8 dac_volumn_control_word[] = {
+		0x37,  0x5e,  0x7e,  0x8e,
+		0x9e,  0xae,  0xb6,  0xbe,
+		0xc6,  0xce,  0xd6,  0xde,
+		0xe6,  0xee,  0xf6,  0xfe,
+};
+
 /*
  * ALSA core supports only 16 bit registers. It means we have to simulate it
  * by virtually splitting a 32bit ADC/DAC registers into two halves
  * high (bits 31:16) and low (bits 15:0). The routins abow detects which part
  * of 32bit register is accessed.
  */
+static void stmp378x_codec_write_cache(struct snd_soc_codec *codec,
+					unsigned int reg, unsigned int value)
+{
+	u16 *cache = codec->reg_cache;
+	if (reg < ADC_REGNUM)
+		cache[reg] = value;
+}
+
 static int stmp378x_codec_write(struct snd_soc_codec *codec,
 				unsigned int reg, unsigned int value)
 {
@@ -107,6 +124,8 @@ static int stmp378x_codec_write(struct snd_soc_codec *codec,
 
 	if (reg >= ADC_REGNUM)
 		return -EIO;
+
+	stmp378x_codec_write_cache(codec, reg, value);
 
 	if (reg & 0x1) {
 		mask <<= 16;
@@ -180,6 +199,109 @@ static unsigned int stmp378x_codec_read(struct snd_soc_codec *codec,
 	return reg_val & 0xffff;
 }
 
+static unsigned int stmp378x_codec_read_cache(struct snd_soc_codec *codec,
+						unsigned int reg)
+{
+	u16 *cache = codec->reg_cache;
+	if (reg >= ADC_REGNUM)
+		return -EINVAL;
+	return cache[reg];
+}
+
+static void stmp378x_codec_sync_reg_cache(struct snd_soc_codec *codec)
+{
+	int reg;
+	for (reg = 0; reg < ADC_REGNUM; reg += 1)
+		stmp378x_codec_write_cache(codec, reg,
+					   stmp378x_codec_read(codec, reg));
+}
+
+
+static int stmp378x_codec_restore_reg(struct snd_soc_codec *codec, unsigned int reg)
+{
+	unsigned int cached_val, hw_val;
+
+	cached_val = stmp378x_codec_read_cache(codec, reg);
+	hw_val = stmp378x_codec_read(codec, reg);
+
+	if (hw_val != cached_val)
+		return stmp378x_codec_write(codec, reg, cached_val);
+
+	return 0;
+}
+
+static int dac_info_volsw(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 2;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = 0xf;
+	return 0;
+}
+
+static int dac_get_volsw(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	int reg, l, r;
+	int i;
+
+	reg = HW_AUDIOOUT_DACVOLUME_RD();
+
+	l = (reg & BM_AUDIOOUT_DACVOLUME_VOLUME_LEFT) >>
+			BP_AUDIOOUT_DACVOLUME_VOLUME_LEFT;
+	r = (reg & BM_AUDIOOUT_DACVOLUME_VOLUME_RIGHT) >>
+			BP_AUDIOOUT_DACVOLUME_VOLUME_RIGHT;
+	/*Left channel*/
+	i = 0;
+	while (i < 16) {
+		if (l == dac_volumn_control_word[i]) {
+			ucontrol->value.integer.value[0] = i;
+			break;
+		}
+		i++;
+	}
+	if (i == 16)
+		ucontrol->value.integer.value[0] = i;
+	/*Right channel*/
+	i = 0;
+	while (i < 16) {
+		if (r == dac_volumn_control_word[i]) {
+			ucontrol->value.integer.value[1] = i;
+			break;
+		}
+		i++;
+	}
+	if (i == 16)
+		ucontrol->value.integer.value[1] = i;
+
+	return 0;
+}
+
+static int dac_put_volsw(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	int reg, l, r;
+	int i;
+
+	i = ucontrol->value.integer.value[0];
+	l = dac_volumn_control_word[i];
+	/*Get dac volume for left channel*/
+	reg = BF_AUDIOOUT_DACVOLUME_VOLUME_LEFT(l);
+
+	i = ucontrol->value.integer.value[1];
+	r = dac_volumn_control_word[i];
+	/*Get dac volume for right channel*/
+	reg = reg | BF_AUDIOOUT_DACVOLUME_VOLUME_RIGHT(r);
+
+	/*Clear left/right dac volume*/
+	HW_AUDIOOUT_DACVOLUME_CLR(BM_AUDIOOUT_DACVOLUME_VOLUME_LEFT |
+					BM_AUDIOOUT_DACVOLUME_VOLUME_RIGHT);
+	HW_AUDIOOUT_DACVOLUME_SET(reg);
+}
+
 static const char *stmp378x_codec_adc_input_sel[] =
 				{"Mic", "Line In 1", "Head Phone", "Line In 2"};
 
@@ -199,6 +321,15 @@ static const struct soc_enum stmp378x_codec_enum[] = {
 /* Codec controls */
 static const struct snd_kcontrol_new stmp378x_snd_controls[] = {
 	/* Playback Volume */
+	{.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	 .name = "DAC Playback Volume",
+	 .access = SNDRV_CTL_ELEM_ACCESS_READWRITE |
+		SNDRV_CTL_ELEM_ACCESS_VOLATILE,
+	 .info = dac_info_volsw,
+	 .get = dac_get_volsw,
+	 .put = dac_put_volsw,
+	},
+
 	SOC_DOUBLE_R("DAC Playback Switch",
 			DAC_VOLUME_H, DAC_VOLUME_L, 8, 0x01, 1),
 	SOC_DOUBLE("HP Playback Volume", DAC_HPVOL_L, 8, 0, 0x7F, 1),
@@ -434,11 +565,15 @@ static int stmp378x_codec_dig_mute(struct snd_soc_dai *dai, int mute)
 	u32 dac_mask = BM_AUDIOOUT_DACVOLUME_MUTE_LEFT |
 		BM_AUDIOOUT_DACVOLUME_MUTE_RIGHT;
 
-	if (mute)
+	if (mute) {
 		HW_AUDIOOUT_DACVOLUME_SET(dac_mask);
-	else
+		HW_AUDIOOUT_HPVOL_SET(BM_AUDIOOUT_HPVOL_MUTE);
+		HW_AUDIOOUT_SPEAKERCTRL_SET(BM_AUDIOOUT_SPEAKERCTRL_MUTE);
+	} else {
 		HW_AUDIOOUT_DACVOLUME_CLR(dac_mask);
-
+		HW_AUDIOOUT_HPVOL_CLR(BM_AUDIOOUT_HPVOL_MUTE);
+		HW_AUDIOOUT_SPEAKERCTRL_CLR(BM_AUDIOOUT_SPEAKERCTRL_MUTE);
+	}
 	return 0;
 }
 
@@ -573,6 +708,10 @@ stmp378x_codec_adc_power_on(struct stmp378x_codec_priv *stmp378x_adc)
 	HW_AUDIOIN_ADCVOL_SET(
 	  BF_AUDIOIN_ADCVOL_SELECT_RIGHT(BV_AUDIOIN_ADCVOL_SELECT__MIC));
 
+	/* Supply bias voltage to microphone */
+	HW_AUDIOIN_MICLINE_SET(BF_AUDIOIN_MICLINE_MIC_RESISTOR(2));
+	HW_AUDIOIN_MICLINE_SET(BM_AUDIOIN_MICLINE_MIC_SELECT);
+
 	/* Set max ADC volume */
 	reg = HW_AUDIOIN_ADCVOLUME_RD();
 	reg &= ~BM_AUDIOIN_ADCVOLUME_VOLUME_LEFT;
@@ -595,6 +734,9 @@ stmp378x_codec_adc_power_down(struct stmp378x_codec_priv *stmp378x_adc)
 	/* Gate ADC clocks */
 	HW_AUDIOIN_CTRL_SET(BM_AUDIOIN_CTRL_CLKGATE);
 	HW_AUDIOIN_ANACLKCTRL_SET(BM_AUDIOIN_ANACLKCTRL_CLKGATE);
+
+	/* Disable bias voltage to microphone*/
+	HW_AUDIOIN_MICLINE_SET(BF_AUDIOIN_MICLINE_MIC_RESISTOR(0));
 }
 
 static void
@@ -658,6 +800,9 @@ stmp378x_codec_init(struct snd_soc_codec *codec)
 
 	stmp378x_codec_dac_enable(stmp378x_adc);
 	stmp378x_codec_adc_enable(stmp378x_adc);
+
+	/*Sync regs and cache*/
+	stmp378x_codec_sync_reg_cache(codec);
 
 	stmp378x_codec_add_controls(codec);
 	stmp378x_codec_add_widgets(codec);
@@ -725,6 +870,9 @@ static int stmp378x_codec_probe(struct platform_device *pdev)
 	codec->write = stmp378x_codec_write;
 	codec->dai = &stmp378x_codec_dai;
 	codec->num_dai = 1;
+	codec->reg_cache_size = sizeof(stmp378x_audio_regs) >> 1;
+	codec->reg_cache_step = 1;
+	codec->reg_cache = (void *)&stmp378x_audio_regs;
 	socdev->codec = codec;
 
 	mutex_init(&codec->mutex);
@@ -838,6 +986,19 @@ static int stmp378x_codec_resume(struct platform_device *pdev)
 
 	stmp378x_codec_dac_enable(stmp378x_adc);
 	stmp378x_codec_adc_enable(stmp378x_adc);
+
+	/*restore registers relevant to amixer controls*/
+	stmp378x_codec_restore_reg(codec, DAC_CTRL_L);
+	stmp378x_codec_restore_reg(codec, DAC_VOLUME_L);
+	stmp378x_codec_restore_reg(codec, DAC_VOLUME_H);
+	stmp378x_codec_restore_reg(codec, DAC_HPVOL_L);
+	stmp378x_codec_restore_reg(codec, DAC_HPVOL_H);
+	stmp378x_codec_restore_reg(codec, DAC_SPEAKERCTRL_H);
+	stmp378x_codec_restore_reg(codec, ADC_VOLUME_L);
+	stmp378x_codec_restore_reg(codec, ADC_VOLUME_H);
+	stmp378x_codec_restore_reg(codec, ADC_ADCVOL_L);
+	stmp378x_codec_restore_reg(codec, ADC_ADCVOL_H);
+	stmp378x_codec_restore_reg(codec, ADC_MICLINE_L);
 
 	ret = 0;
 

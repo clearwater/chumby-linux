@@ -108,7 +108,8 @@ static struct platform_device *devices[] = {
 	&stmp3xxx_dcp,
 //	&stmp3xxx_mtest,
 	&stmp3xxx_battery,
-//	&stmp3xxx_pxp,
+	&stmp3xxx_pxp,
+	&stmp3xxx_viim,
 };
 
 static struct stmpkbd_keypair keyboard_data[] = {
@@ -235,10 +236,23 @@ static int usb_phy_enable(struct platform_device *pdev)
 
 #if defined(CONFIG_USB_EHCI_HCD) || defined(CONFIG_USB_EHCI_HCD_MODULE)
 	/* enable disconnect detector */
-	//HW_USBPHY_CTRL_SET(BM_USBPHY_CTRL_ENHOSTDISCONDETECT);
+	/* enable disconnect detector must be after entry high speed mode*/
+	/*HW_USBPHY_CTRL_SET(BM_USBPHY_CTRL_ENHOSTDISCONDETECT);
+	*/
 #endif
 	return 0;
 }
+
+int usb_host_wakeup_irq(struct device *wkup_dev)
+{
+	return 0;
+}
+EXPORT_SYMBOL(usb_host_wakeup_irq);
+
+void usb_host_set_wakeup(struct device *wkup_dev, bool para)
+{
+}
+EXPORT_SYMBOL(usb_host_set_wakeup);
 
 static struct stmp37xx_spi_platform_data enc_data = {
 	.irq_pin = PINID_SSP1_DATA1,

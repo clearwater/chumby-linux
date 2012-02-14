@@ -149,7 +149,7 @@ static struct mtd_partition mxc_nand_partitions[] = {
 	{
 	 .name = "nand.rootfs",
 	 .offset = MTDPART_OFS_APPEND,
-	 .size = 96 * 1024 * 1024},
+	 .size = 256 * 1024 * 1024},
 	{
 	 .name = "nand.configure",
 	 .offset = MTDPART_OFS_APPEND,
@@ -279,6 +279,10 @@ static struct i2c_board_info mxc_i2c_board_info[] __initdata = {
 	 .addr = 0x0a,
 	 },
 	{
+	 .type = "ak5702-i2c",
+	 .addr = 0x13,
+	 },
+	{
 	 .type = "ov2640",
 	 .addr = 0x30,
 	 .platform_data = (void *)&camera_data,
@@ -341,6 +345,25 @@ static inline void mxc_init_sgtl5000(void)
 }
 #endif
 
+#if defined(CONFIG_SND_SOC_IMX_3STACK_AK5702) \
+    || defined(CONFIG_SND_SOC_IMX_3STACK_AK5702_MODULE)
+static struct platform_device mxc_ak5702_device = {
+	.name = "imx-3stack-ak5702",
+	.dev = {
+		.release = mxc_nop_release,
+		},
+};
+
+static void mxc_init_ak5702(void)
+{
+	platform_device_register(&mxc_ak5702_device);
+}
+#else
+static inline void mxc_init_ak5702(void)
+{
+}
+#endif
+
 #if  defined(CONFIG_SMSC911X) || defined(CONFIG_SMSC911X_MODULE)
 static struct resource smsc911x_resources[] = {
 	{
@@ -381,6 +404,60 @@ late_initcall(mxc_init_enet);
 #if defined(CONFIG_FEC) || defined(CONFIG_FEC_MODULE)
 unsigned int expio_intr_fec = MXC_INT_POWER_FAIL;
 EXPORT_SYMBOL(expio_intr_fec);
+#endif
+
+#if defined(CONFIG_IMX_SIM) || defined(CONFIG_IMX_SIM_MODULE)
+/* Used to configure the SIM bus */
+static struct mxc_sim_platform_data sim1_data = {
+	.clk_rate = 5000000,
+	.clock_sim = "sim1_clk",
+	.power_sim = NULL,
+	.init = NULL,
+	.exit = NULL,
+	.detect = 1,
+};
+
+/*!
+ * Resource definition for the SIM
+ */
+static struct resource mxc_sim1_resources[] = {
+	[0] = {
+	       .start = SIM1_BASE_ADDR,
+	       .end = SIM1_BASE_ADDR + SZ_4K - 1,
+	       .flags = IORESOURCE_MEM,
+	       },
+	[1] = {
+	       .start = MXC_INT_SIM1,
+	       .end = MXC_INT_SIM1,
+	       .flags = IORESOURCE_IRQ,
+	       },
+	[2] = {
+	       .start = 0,
+	       .end = 0,
+	       .flags = IORESOURCE_IRQ,
+	       },
+};
+
+/*! Device Definition for IMX SIM */
+static struct platform_device mxc_sim1_device = {
+	.name = "mxc_sim",
+	.id = 0,
+	.dev = {
+		.release = mxc_nop_release,
+		.platform_data = &sim1_data,
+		},
+	.num_resources = ARRAY_SIZE(mxc_sim1_resources),
+	.resource = mxc_sim1_resources,
+};
+
+static inline void mxc_init_sim(void)
+{
+	(void)platform_device_register(&mxc_sim1_device);
+}
+#else
+static inline void mxc_init_sim(void)
+{
+}
 #endif
 
 #if defined(CONFIG_MMC_IMX_ESDHCI) || defined(CONFIG_MMC_IMX_ESDHCI_MODULE)
@@ -489,7 +566,7 @@ static void __init mx25_3stack_timer_init(void)
 }
 
 static struct sys_timer mxc_timer = {
-	.init	= mx25_3stack_timer_init,
+	.init = mx25_3stack_timer_init,
 };
 
 #if defined(CONFIG_CAN_FLEXCAN) || defined(CONFIG_CAN_FLEXCAN_MODULE)
@@ -573,7 +650,9 @@ static void __init mxc_board_init(void)
 	mxc_init_bl();
 	mxc_init_nand_mtd();
 	mxc_init_sgtl5000();
+	mxc_init_ak5702();
 	mxc_init_mmc();
+	mxc_init_sim();
 }
 
 /*

@@ -27,8 +27,21 @@
 #include <mach/arc_otg.h>
 #include <asm/mach-types.h>
 
+static struct regulator *usbotg_regux;
+
 static void usb_utmi_init(struct fsl_xcvr_ops *this)
 {
+#if defined(CONFIG_MXC_PMIC_MC13892_MODULE) || defined(CONFIG_MXC_PMIC_MC13892)
+	if (machine_is_mx51_3ds()) {
+		unsigned int value;
+
+		/* VUSBIN */
+		pmic_read_reg(REG_USB1, &value, 0xffffff);
+		value |= 0x1;
+		value |= (0x1 << 3);
+		pmic_write_reg(REG_USB1, value, 0xffffff);
+	}
+#endif
 }
 
 static void usb_utmi_uninit(struct fsl_xcvr_ops *this)
@@ -45,44 +58,20 @@ static void set_power(struct fsl_xcvr_ops *this,
 		      struct fsl_usb2_platform_data *pdata, int on)
 {
 	struct device *dev = &pdata->pdev->dev;
-	struct regulator *usbotg_regux;
 
 	pr_debug("real %s(on=%d) pdata=0x%p\n", __func__, on, pdata);
 	if (machine_is_mx37_3ds()) {
-		if (!board_is_mx37(BOARD_REV_2))
-			usbotg_regux = regulator_get(dev, "DCDC2");
-		else
-			usbotg_regux = regulator_get(dev, "SWBST");
 		if (on) {
+			if (!board_is_mx37(BOARD_REV_2))
+				usbotg_regux = regulator_get(dev, "DCDC2");
+			else
+				usbotg_regux = regulator_get(dev, "SWBST");
+
 			regulator_enable(usbotg_regux);
 		} else {
 			regulator_disable(usbotg_regux);
+			regulator_put(usbotg_regux);
 		}
-#if defined(CONFIG_MXC_PMIC_MC13892_MODULE) || defined(CONFIG_MXC_PMIC_MC13892)
-	} else if (machine_is_mx51_3ds()) {
-		unsigned int value;
-
-		usbotg_regux = regulator_get(dev, "SWBST");
-		if (on)
-			regulator_enable(usbotg_regux);
-		else
-			regulator_disable(usbotg_regux);
-
-		/* VUSBIN */
-		pmic_read_reg(REG_USB1, &value, 0xffffff);
-		if (on)
-			value |= 0x1;
-		else
-			value &= ~0x1;
-		pmic_write_reg(REG_USB1, value, 0xffffff);
-
-		/* VUSBEN */
-		usbotg_regux = regulator_get(dev, "VUSB");
-		if (on)
-			regulator_enable(usbotg_regux);
-		else
-			regulator_disable(usbotg_regux);
-#endif
 	}
 }
 

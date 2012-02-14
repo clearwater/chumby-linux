@@ -28,6 +28,94 @@
  *
  * @ingroup GPIO_MX25
  */
+static struct mxc_iomux_pin_cfg __initdata mxc_iomux_pins[] = {
+};
+
+static struct mxc_iomux_pin_cfg __initdata sim_iomux_pins[] = {
+	/* SIM1 */
+	/* SIM1 CLK */
+	{
+	 MX25_PIN_CSI_D2, MUX_CONFIG_ALT4,
+	 PAD_CTL_SRE_FAST |
+	 PAD_CTL_DRV_HIGH | PAD_CTL_DRV_3_3V |
+	 PAD_CTL_HYS_CMOS | PAD_CTL_47K_PU |
+	 PAD_CTL_PUE_PULL | PAD_CTL_ODE_CMOS | PAD_CTL_PKE_ENABLE,
+	 },
+	/* SIM1 RST */
+	{
+	 MX25_PIN_CSI_D3, MUX_CONFIG_ALT4,
+	 PAD_CTL_DRV_HIGH | PAD_CTL_DRV_3_3V |
+	 PAD_CTL_HYS_CMOS | PAD_CTL_47K_PU |
+	 PAD_CTL_PUE_PULL | PAD_CTL_ODE_CMOS | PAD_CTL_PKE_ENABLE,
+	 },
+	/* SIM1 VEN */
+	{
+	 MX25_PIN_CSI_D4, MUX_CONFIG_ALT4,
+	 PAD_CTL_DRV_HIGH | PAD_CTL_DRV_3_3V |
+	 PAD_CTL_HYS_CMOS | PAD_CTL_100K_PU |
+	 PAD_CTL_PUE_PULL | PAD_CTL_ODE_CMOS | PAD_CTL_PKE_ENABLE,
+	 },
+	/* SIM1 TX */
+	{
+	 MX25_PIN_CSI_D5, MUX_CONFIG_ALT4,
+	 PAD_CTL_SRE_FAST |
+	 PAD_CTL_DRV_HIGH | PAD_CTL_DRV_3_3V |
+	 PAD_CTL_HYS_CMOS | PAD_CTL_22K_PU |
+	 PAD_CTL_PUE_PULL | PAD_CTL_ODE_OpenDrain | PAD_CTL_PKE_ENABLE,
+	 },
+	/* SIM1 PD */
+	{
+	 MX25_PIN_CSI_D6, MUX_CONFIG_ALT4,
+	 PAD_CTL_DRV_HIGH | PAD_CTL_DRV_3_3V |
+	 PAD_CTL_HYS_CMOS | PAD_CTL_22K_PU |
+	 PAD_CTL_PUE_PULL | PAD_CTL_ODE_CMOS | PAD_CTL_PKE_ENABLE,
+	 },
+	/* SIM2 */
+	/* SIM2 CLK */
+	{
+	 MX25_PIN_CSI_D8, MUX_CONFIG_ALT4,
+	 PAD_CTL_DRV_NORMAL | PAD_CTL_DRV_3_3V |
+	 PAD_CTL_HYS_SCHMITZ | PAD_CTL_100K_PU |
+	 PAD_CTL_PUE_KEEPER | PAD_CTL_ODE_CMOS | PAD_CTL_PKE_ENABLE,
+	 },
+	/* SIM2 RST */
+	{
+	 MX25_PIN_CSI_D9, MUX_CONFIG_ALT4,
+	 PAD_CTL_DRV_NORMAL | PAD_CTL_DRV_3_3V |
+	 PAD_CTL_HYS_SCHMITZ | PAD_CTL_100K_PU |
+	 PAD_CTL_PUE_KEEPER | PAD_CTL_ODE_CMOS | PAD_CTL_PKE_ENABLE,
+	 },
+	/* SIM2 VEN */
+	{
+	 MX25_PIN_CSI_MCLK, MUX_CONFIG_ALT4,
+	 PAD_CTL_DRV_NORMAL | PAD_CTL_DRV_3_3V |
+	 PAD_CTL_HYS_SCHMITZ | PAD_CTL_100K_PU |
+	 PAD_CTL_PUE_PULL | PAD_CTL_ODE_CMOS | PAD_CTL_PKE_NONE,
+	 },
+	/* SIM2 TX */
+	{
+	 MX25_PIN_CSI_VSYNC, MUX_CONFIG_ALT4,
+	 PAD_CTL_DRV_NORMAL | PAD_CTL_DRV_3_3V |
+	 PAD_CTL_HYS_SCHMITZ | PAD_CTL_100K_PU |
+	 PAD_CTL_PUE_KEEPER | PAD_CTL_ODE_CMOS | PAD_CTL_PKE_ENABLE,
+	 },
+	/* SIM2 PD */
+	{
+	 MX25_PIN_CSI_HSYNC, MUX_CONFIG_ALT4,
+	 PAD_CTL_DRV_NORMAL | PAD_CTL_DRV_3_3V |
+	 PAD_CTL_HYS_SCHMITZ | PAD_CTL_100K_PU |
+	 PAD_CTL_PUE_KEEPER | PAD_CTL_ODE_CMOS | PAD_CTL_PKE_ENABLE,
+	 },
+};
+
+static int __initdata enable_sim = { 0 };
+static int __init sim_setup(char *__unused)
+{
+	enable_sim = 1;
+	return 1;
+}
+
+__setup("sim", sim_setup);
 
 /*!
  * This system-wide GPIO function initializes the pins during system startup.
@@ -36,8 +124,35 @@
  * \b fixup_mx25_3stack() during system startup. This function is board
  * specific.
  */
-void mx25_3stack_gpio_init(void)
+void __init mx25_3stack_gpio_init(void)
 {
+	int i, num = 0;
+	struct mxc_iomux_pin_cfg *pin_ptr;
+
+	for (i = 0; i < ARRAY_SIZE(mxc_iomux_pins); i++) {
+		mxc_request_iomux(mxc_iomux_pins[i].pin,
+				  mxc_iomux_pins[i].mux_mode);
+		if (mxc_iomux_pins[i].pad_cfg)
+			mxc_iomux_set_pad(mxc_iomux_pins[i].pin,
+					  mxc_iomux_pins[i].pad_cfg);
+		if (mxc_iomux_pins[i].in_select)
+			mxc_iomux_set_input(mxc_iomux_pins[i].in_select,
+					    mxc_iomux_pins[i].in_mode);
+	}
+
+	if (enable_sim) {
+		pin_ptr = sim_iomux_pins;
+		num = ARRAY_SIZE(sim_iomux_pins);
+	}
+
+	for (i = 0; i < num; i++) {
+		mxc_request_iomux(pin_ptr[i].pin, pin_ptr[i].mux_mode);
+		if (pin_ptr[i].pad_cfg)
+			mxc_iomux_set_pad(pin_ptr[i].pin, pin_ptr[i].pad_cfg);
+		if (pin_ptr[i].in_select)
+			mxc_iomux_set_input(pin_ptr[i].in_select,
+					pin_ptr[i].in_mode);
+	}
 }
 
 /*!
@@ -345,8 +460,6 @@ void gpio_fec_inactive(void)
 	mxc_request_gpio(MX25_PIN_FEC_RDATA1);
 	mxc_request_gpio(MX25_PIN_FEC_TDATA1);
 
-	mxc_request_gpio(MX25_PIN_D12);	/* FEC_RESET_B */
-
 	mxc_free_iomux(MX25_PIN_FEC_TX_CLK, MUX_CONFIG_GPIO);
 	mxc_free_iomux(MX25_PIN_FEC_RX_DV, MUX_CONFIG_GPIO);
 	mxc_free_iomux(MX25_PIN_FEC_RDATA0, MUX_CONFIG_GPIO);
@@ -358,6 +471,7 @@ void gpio_fec_inactive(void)
 	mxc_free_iomux(MX25_PIN_FEC_TDATA1, MUX_CONFIG_GPIO);
 	mxc_request_iomux(MX25_PIN_POWER_FAIL, MUX_CONFIG_FUNC); /* PHY INT */
 
+	mxc_free_iomux(MX25_PIN_A17, MUX_CONFIG_GPIO);
 	mxc_free_iomux(MX25_PIN_D12, MUX_CONFIG_GPIO); /* FEC_RESET_B */
 
 	/* We keep pin A17, so FEC_ENABLE doesn't float */

@@ -202,7 +202,7 @@ static struct mtd_partition mxc_nand_partitions[] = {
 	{
 	 .name = "nand.rootfs",
 	 .offset = MTDPART_OFS_APPEND,
-	 .size = 128 * 1024 * 1024},
+	 .size = 256 * 1024 * 1024},
 	{
 	 .name = "nand.userfs1",
 	 .offset = MTDPART_OFS_APPEND,
@@ -214,7 +214,7 @@ static struct mtd_partition mxc_nand_partitions[] = {
 	{
 	 .name = "nand.userfs3",
 	 .offset = MTDPART_OFS_APPEND,
-	 .size = 1024 * 1024 * 1024},
+	 .size = MTDPART_SIZ_FULL},
 };
 
 static struct flash_platform_data mxc_nand_data = {
@@ -582,7 +582,7 @@ struct mxc_unifi_platform_data *get_unifi_plat_data(void)
 EXPORT_SYMBOL(get_unifi_plat_data);
 
 #if defined(CONFIG_MMC_IMX_ESDHCI) || defined(CONFIG_MMC_IMX_ESDHCI_MODULE)
-static struct mxc_mmc_platform_data mmc_data = {
+static struct mxc_mmc_platform_data mmc1_data = {
 	.ocr_mask = MMC_VDD_32_33,
 	.caps = MMC_CAP_4_BIT_DATA,
 	.min_clk = 150000,
@@ -620,13 +620,13 @@ static struct platform_device mxcsdhc1_device = {
 	.id = 0,
 	.dev = {
 		.release = mxc_nop_release,
-		.platform_data = &mmc_data,
+		.platform_data = &mmc1_data,
 		},
 	.num_resources = ARRAY_SIZE(mxcsdhc1_resources),
 	.resource = mxcsdhc1_resources,
 };
 
-static struct mxc_mmc_platform_data mmc1_data = {
+static struct mxc_mmc_platform_data mmc2_data = {
 	.ocr_mask = MMC_VDD_27_28 | MMC_VDD_28_29 | MMC_VDD_29_30 |
 	    MMC_VDD_31_32,
 	.caps = MMC_CAP_4_BIT_DATA,
@@ -661,7 +661,7 @@ static struct platform_device mxcsdhc2_device = {
 	.id = 1,
 	.dev = {
 		.release = mxc_nop_release,
-		.platform_data = &mmc1_data,
+		.platform_data = &mmc2_data,
 		},
 	.num_resources = ARRAY_SIZE(mxcsdhc2_resources),
 	.resource = mxcsdhc2_resources,

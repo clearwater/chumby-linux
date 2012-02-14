@@ -322,11 +322,11 @@ static int _clk_perclkx_set_parent3(struct clk *clk, struct clk *parent)
 	}
 
 	if (parent == &upll_24610k_clk) {
-		mcr |= bit;
+		mcr |= 1 << bit;
 		__raw_writel(mcr, MXC_CCM_MCR);
 		clk->parent = parent;
 	} else {
-		mcr &= ~bit;
+		mcr &= ~(1 << bit);
 		__raw_writel(mcr, MXC_CCM_MCR);
 		return _clk_perclkx_set_parent(clk, parent);
 	}
@@ -526,7 +526,7 @@ static struct clk per_clk[] = {
 	{
 	 .name = "per_gpt_clk",
 	 .id = 5,
-	 .parent = &upll_clk,	/* can be AHB or UPLL */
+	 .parent = &ahb_clk,	/* Must be AHB */
 	 .round_rate = _clk_perclkx_round_rate,
 	 .set_rate = _clk_perclkx_set_rate,
 	 .set_parent = _clk_perclkx_set_parent,
@@ -548,7 +548,7 @@ static struct clk per_clk[] = {
 	{
 	 .name = "per_lcdc_clk",
 	 .id = 7,
-	 .parent = &ahb_clk,	/* can be AHB or UPLL */
+	 .parent = &upll_clk,	/* Must be UPLL */
 	 .round_rate = _clk_perclkx_round_rate,
 	 .set_rate = _clk_perclkx_set_rate,
 	 .set_parent = _clk_perclkx_set_parent,
@@ -1185,7 +1185,7 @@ struct clk sdma_clk[] = {
 
 struct clk sim1_clk[] = {
 	{
-	 .name = "sim_clk",
+	 .name = "sim1_clk",
 	 .id = 0,
 	 .parent = &per_clk[11],
 	 .secondary = &sim1_clk[1],},
@@ -1201,7 +1201,7 @@ struct clk sim1_clk[] = {
 
 struct clk sim2_clk[] = {
 	{
-	 .name = "sim_clk",
+	 .name = "sim2_clk",
 	 .id = 1,
 	 .parent = &per_clk[12],
 	 .secondary = &sim2_clk[1],},
@@ -1684,7 +1684,6 @@ extern void propagate_rate(struct clk *tclk);
 int __init mxc_clocks_init(unsigned long ckil, unsigned long osc, unsigned long ckih1, unsigned long ckih2)
 {
 	struct clk **clkp;
-	int i;
 
 	for (clkp = mxc_clks; clkp < mxc_clks + ARRAY_SIZE(mxc_clks); clkp++)
 		clk_register(*clkp);
@@ -1696,17 +1695,23 @@ int __init mxc_clocks_init(unsigned long ckil, unsigned long osc, unsigned long 
 		     (1 << MXC_CCM_CGCR1_IIM_OFFSET), MXC_CCM_CGCR1);
 	__raw_writel(1 << MXC_CCM_CGCR2_SCC_OFFSET, MXC_CCM_CGCR2);
 
-	/* Set all perclk sources to upll */
-	for (i = 0; i < 16; i++)
-		per_clk[i].set_parent(&per_clk[i], &upll_clk);
-
 	/* This will propagate to all children and init all the clock rates */
 	propagate_rate(&osc24m_clk);
 	propagate_rate(&osc32k_clk);
 
+	/* GPT clock must be derived from AHB clock */
+	clk_set_rate(&per_clk[5], ahb_clk.rate / 10);
+
+	/* LCDC clock must be derived from UPLL clock */
+	clk_set_parent(&per_clk[7], &upll_clk);
+	clk_set_rate(&per_clk[7], upll_clk.rate);
+
 	/* the NFC clock must be derived from AHB clock */
 	clk_set_parent(&per_clk[8], &ahb_clk);
 	clk_set_rate(&per_clk[8], ahb_clk.rate / 6);
+
+	/* sim clock */
+	clk_set_rate(&per_clk[11], ahb_clk.rate / 2);
 
 	/* the csi clock must be derived from UPLL clock */
 	clk_set_parent(&per_clk[0], &upll_clk);

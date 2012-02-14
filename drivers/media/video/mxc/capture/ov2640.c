@@ -54,7 +54,7 @@ struct reg_value {
 static struct reg_value ov2640_setting_1600_1120[] = {
 #ifdef CONFIG_MACH_MX25_3DS
 	{0xff, 0x01, 0}, {0x12, 0x80, 5}, {0xff, 0x00, 0}, {0x2c, 0xff, 0},
-	{0x2e, 0xdf, 0}, {0xff, 0x01, 0}, {0x3c, 0x32, 0}, {0x11, 0x02, 0},
+	{0x2e, 0xdf, 0}, {0xff, 0x01, 0}, {0x3c, 0x32, 0}, {0x11, 0x00, 0},
 	{0x09, 0x02, 0}, {0x04, 0x28, 0}, {0x13, 0xe5, 0}, {0x14, 0x48, 0},
 	{0x2c, 0x0c, 0}, {0x33, 0x78, 0}, {0x3a, 0x33, 0}, {0x3b, 0xfb, 0},
 	{0x3e, 0x00, 0}, {0x43, 0x11, 0}, {0x16, 0x10, 0}, {0x39, 0x02, 0},
@@ -153,7 +153,7 @@ static struct reg_value ov2640_setting_1600_1120[] = {
 static struct reg_value ov2640_setting_800_600[] = {
 #ifdef CONFIG_MACH_MX25_3DS
 	{0xff, 0x01, 0}, {0x12, 0x80, 5}, {0xff, 0x00, 0}, {0x2c, 0xff, 0},
-	{0x2e, 0xdf, 0}, {0xff, 0x01, 0}, {0x3c, 0x32, 0}, {0x11, 0x01, 0},
+	{0x2e, 0xdf, 0}, {0xff, 0x01, 0}, {0x3c, 0x32, 0}, {0x11, 0x00, 0},
 	{0x09, 0x02, 0}, {0x04, 0x28, 0}, {0x13, 0xe5, 0}, {0x14, 0x48, 0},
 	{0x2c, 0x0c, 0}, {0x33, 0x78, 0}, {0x3a, 0x33, 0}, {0x3b, 0xfb, 0},
 	{0x3e, 0x00, 0}, {0x43, 0x11, 0}, {0x16, 0x10, 0}, {0x39, 0x92, 0},
@@ -335,7 +335,7 @@ static int ov2640_init_mode(struct sensor *s)
 	return ret;
 }
 
-/* At present only support change to 15fps */
+/* At present only support change to 15fps(only for SVGA mode) */
 static int ov2640_set_fps(struct sensor *s, int fps)
 {
 	int ret = 0;
@@ -345,8 +345,8 @@ static int ov2640_set_fps(struct sensor *s, int fps)
 		ret = -EPERM;
 	}
 
-	/* change the camera framerate to 15fps */
-	if (i2c_smbus_write_byte_data(s->i2c_client, 0x11, 0x03) < 0) {
+	/* change the camera framerate to 15fps(only for SVGA mode) */
+	if (i2c_smbus_write_byte_data(s->i2c_client, 0x11, 0x01) < 0) {
 		pr_err("change camera to 15fps failed\n");
 		ret = -EPERM;
 	}
@@ -798,29 +798,6 @@ static int ioctl_dev_init(struct v4l2_int_device *s)
 	gpio_sensor_active();
 	ov2640_data.on = true;
 
-	if (io_regulator) {
-		regulator_set_voltage(io_regulator, 2800000, 2800000);
-		if (regulator_enable(io_regulator) != 0)
-			return -EIO;
-	}
-	if (core_regulator) {
-		regulator_set_voltage(core_regulator, 1300000, 1300000);
-		if (regulator_enable(core_regulator) != 0)
-			return -EIO;
-	}
-	/*GPO 3 */
-	if (gpo_regulator) {
-		if (regulator_enable(gpo_regulator) != 0) {
-			return -EIO;
-		}
-	}
-	if (analog_regulator) {
-		/* regulator_set_voltage(analog_regulator, 2800000, 2800000); */
-		regulator_set_voltage(analog_regulator, 2000000, 2000000);
-		if (regulator_enable(analog_regulator) != 0)
-			return -EIO;
-	}
-
 	tgt_xclk = ov2640_data.mclk;
 	tgt_xclk = min(tgt_xclk, (u32)OV2640_XCLK_MAX);
 	tgt_xclk = max(tgt_xclk, (u32)OV2640_XCLK_MIN);
@@ -834,12 +811,27 @@ static int ioctl_dev_init(struct v4l2_int_device *s)
 }
 
 /*!
+ * ioctl_dev_exit - V4L2 sensor interface handler for vidioc_int_dev_exit_num
+ * @s: pointer to standard V4L2 device structure
+ *
+ * Delinitialise the device when slave detaches to the master.
+ */
+static int ioctl_dev_exit(struct v4l2_int_device *s)
+{
+	pr_debug("In ov2640:ioctl_dev_exit\n");
+
+	gpio_sensor_inactive();
+
+	return 0;
+}
+
+/*!
  * This structure defines all the ioctls for this module and links them to the
  * enumeration.
  */
 static struct v4l2_int_ioctl_desc ov2640_ioctl_desc[] = {
 	{vidioc_int_dev_init_num, (v4l2_int_ioctl_func *)ioctl_dev_init},
-/*	{vidioc_int_dev_exit_num, (v4l2_int_ioctl_func *)ioctl_dev_exit}, */
+	{vidioc_int_dev_exit_num, (v4l2_int_ioctl_func*)ioctl_dev_exit},
 	{vidioc_int_s_power_num, (v4l2_int_ioctl_func *)ioctl_s_power},
 	{vidioc_int_g_ifparm_num, (v4l2_int_ioctl_func *)ioctl_g_ifparm},
 /*	{vidioc_int_g_needs_reset_num,
@@ -906,34 +898,92 @@ static int ov2640_probe(struct i2c_client *client,
 	if (plat_data->io_regulator) {
 		io_regulator =
 		    regulator_get(&client->dev, plat_data->io_regulator);
-		if (IS_ERR(io_regulator))
+		if (!IS_ERR(io_regulator)) {
+			regulator_set_voltage(io_regulator, 2800000, 2800000);
+			if (regulator_enable(io_regulator) != 0) {
+				pr_err("%s:io set voltage error\n", __func__);
+				goto err1;
+			} else {
+				dev_dbg(&client->dev,
+					"%s:io set voltage ok\n", __func__);
+			}
+		} else
 			io_regulator = NULL;
 	}
+
 	if (plat_data->core_regulator) {
 		core_regulator =
 		    regulator_get(&client->dev, plat_data->core_regulator);
-		if (IS_ERR(core_regulator))
+		if (!IS_ERR(core_regulator)) {
+			regulator_set_voltage(core_regulator,
+					 1300000, 1300000);
+			if (regulator_enable(core_regulator) != 0) {
+				pr_err("%s:core set voltage error\n", __func__);
+				goto err2;
+			} else {
+				dev_dbg(&client->dev,
+					"%s:core set voltage ok\n", __func__);
+			}
+		} else
 			core_regulator = NULL;
 	}
+
 	if (plat_data->analog_regulator) {
 		analog_regulator =
 		    regulator_get(&client->dev, plat_data->analog_regulator);
-		if (IS_ERR(analog_regulator))
+		if (!IS_ERR(analog_regulator)) {
+			regulator_set_voltage(analog_regulator, 2000000, 2000000);
+			if (regulator_enable(analog_regulator) != 0) {
+				pr_err("%s:analog set voltage error\n",
+					 __func__);
+				goto err3;
+			} else {
+				dev_dbg(&client->dev,
+					"%s:analog set voltage ok\n", __func__);
+			}
+		} else
 			analog_regulator = NULL;
 	}
+
 	if (plat_data->gpo_regulator) {
 		gpo_regulator =
 		    regulator_get(&client->dev, plat_data->gpo_regulator);
-		if (IS_ERR(gpo_regulator))
+		if (!IS_ERR(gpo_regulator)) {
+			if (regulator_enable(gpo_regulator) != 0) {
+				pr_err("%s:gpo3 set voltage error\n", __func__);
+				goto err4;
+			} else {
+				dev_dbg(&client->dev,
+					"%s:gpo3 set voltage ok\n", __func__);
+			}
+		} else
 			gpo_regulator = NULL;
 	}
 
 	/* This function attaches this structure to the /dev/video0 device.
-	 * The pointer in priv points to the mt9v111_data structure here.*/
+	 * The pointer in priv points to the ov2640_data structure here.*/
 	ov2640_int_device.priv = &ov2640_data;
 	retval = v4l2_int_device_register(&ov2640_int_device);
 
 	return retval;
+
+err4:
+	if (analog_regulator) {
+		regulator_disable(analog_regulator);
+		regulator_put(analog_regulator);
+	}
+err3:
+	if (core_regulator) {
+		regulator_disable(core_regulator);
+		regulator_put(core_regulator);
+	}
+err2:
+	if (io_regulator) {
+		regulator_disable(io_regulator);
+		regulator_put(io_regulator);
+	}
+err1:
+	return -1;
 }
 
 /*!
@@ -1020,7 +1070,6 @@ static void __exit ov2640_clean(void)
 {
 	pr_debug("In ov2640_clean\n");
 	i2c_del_driver(&ov2640_i2c_driver);
-	gpio_sensor_inactive();
 }
 
 module_init(ov2640_init);
