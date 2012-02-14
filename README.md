@@ -12,6 +12,7 @@ git remote add --mirror github git@github.com:clearwater/chumby-linux.git
 ```
 
 For each of the branches we want to copy
+
 ```
 B=imx_2.6.31
 git checkout -t origin/$B
@@ -30,6 +31,7 @@ git push github -u falconwing
 ```
 
 Now replace the kernel files with those from Chumby
+
 ```
 rm -rf *
 tar -zx --strip-components 1 -f ../../linux-2.6.28.mx233-falconwing-1.0.7-053111
