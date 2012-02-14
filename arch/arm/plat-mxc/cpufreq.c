@@ -42,6 +42,7 @@ int cpu_freq_khz_max;
 int arm_lpm_clk;
 int arm_normal_clk;
 int cpufreq_suspended;
+int cpufreq_trig_needed;
 
 static struct clk *cpu_clk;
 static struct regulator *gp_regulator;
@@ -61,7 +62,7 @@ extern int low_freq_bus_used(void);
 extern struct cpu_wp *(*get_cpu_wp)(int *wp);
 #endif
 
-static int set_cpu_freq(int freq)
+int set_cpu_freq(int freq)
 {
 	int ret = 0;
 	int org_cpu_rate;
@@ -69,7 +70,6 @@ static int set_cpu_freq(int freq)
 	int i;
 
 	org_cpu_rate = clk_get_rate(cpu_clk);
-
 	if (org_cpu_rate == freq)
 		return ret;
 
@@ -89,13 +89,13 @@ static int set_cpu_freq(int freq)
 			return ret;
 		}
 	}
-
+	
 	ret = clk_set_rate(cpu_clk, freq);
 	if (ret != 0) {
 		printk(KERN_DEBUG "cannot set CPU clock rate\n");
 		return ret;
 	}
-
+	
 	if (freq < org_cpu_rate) {
 		ret = regulator_set_voltage(gp_regulator, gp_volt, gp_volt);
 		if (ret < 0) {
@@ -103,7 +103,7 @@ static int set_cpu_freq(int freq)
 			return ret;
 		}
 	}
-
+	
 	return ret;
 }
 
@@ -153,10 +153,7 @@ static int mxc_set_target(struct cpufreq_policy *policy,
 	int low_freq_bus_ready = 0;
 	int ret = 0;
 
-	if (cpufreq_suspended)
-		return 0;
-
-	if (dvfs_core_is_active) {
+	if (dvfs_core_is_active || cpufreq_suspended) {
 		target_freq = clk_get_rate(cpu_clk) / 1000;
 		freq_Hz = calc_frequency_khz(target_freq, relation) * 1000;
 		if (freq_Hz == arm_lpm_clk)
@@ -280,25 +277,11 @@ static int __init mxc_cpufreq_driver_init(struct cpufreq_policy *policy)
 static int mxc_cpufreq_suspend(struct cpufreq_policy *policy,
 				     pm_message_t state)
 {
-	struct cpufreq_freqs freqs;
-	int ret = 0;
-	cpufreq_suspended = 1;
-
-	freqs.old = clk_get_rate(cpu_clk) / 1000;
-	freqs.new = arm_normal_clk / 1000;
-	freqs.cpu = 0;
-	freqs.flags = 0;
-
-	if (clk_get_rate(cpu_clk) != arm_normal_clk) {
-		set_high_bus_freq(1);
-		ret = set_cpu_freq(arm_normal_clk);
-	}
-	return ret;
+	return 0;
 }
 
 static int mxc_cpufreq_resume(struct cpufreq_policy *policy)
 {
-	cpufreq_suspended = 0;
 	return 0;
 }
 

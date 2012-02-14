@@ -249,6 +249,41 @@ static inline void mxc_init_bl(void)
 }
 #endif
 
+/*!
+ * Power Key interrupt handler.
+ */
+static irqreturn_t power_key_int(int irq, void *dev_id)
+{
+	pr_info("on-off key pressed\n");
+	return 0;
+}
+
+/*!
+ * Power Key initialization.
+ */
+static int __init mxc_init_power_key(void)
+{
+	/*Set power key as wakeup resource */
+	int irq, ret;
+
+	mxc_request_iomux(MX25_PIN_A25, MUX_CONFIG_ALT5);
+	mxc_iomux_set_pad(MX25_PIN_A25, PAD_CTL_DRV_NORMAL);
+	gpio_request(IOMUX_TO_GPIO(MX25_PIN_A25), NULL);
+	gpio_direction_input(IOMUX_TO_GPIO(MX25_PIN_A25));
+
+	irq = IOMUX_TO_IRQ(MX25_PIN_A25);
+	set_irq_type(irq, IRQF_TRIGGER_RISING);
+	ret = request_irq(irq, power_key_int, 0, "power_key", 0);
+	if (ret)
+		pr_info("register on-off key interrupt failed\n");
+	else
+		enable_irq_wake(irq);
+
+	return ret;
+}
+
+late_initcall(mxc_init_power_key);
+
 static struct spi_board_info mxc_spi_board_info[] __initdata = {
 	{
 	 .modalias = "cpld_spi",
@@ -579,10 +614,10 @@ static void flexcan_xcvr_enable(int id, int en)
 
 	if (en) {
 		if (!pwdn++)
-			mxc_set_gpio_dataout(MX25_PIN_D14, 0);
+			gpio_set_value(IOMUX_TO_GPIO(MX25_PIN_D14), 0);
 	} else {
 		if (!--pwdn)
-			mxc_set_gpio_dataout(MX25_PIN_D14, 1);
+			gpio_set_value(IOMUX_TO_GPIO(MX25_PIN_D14), 1);
 	}
 }
 
@@ -635,7 +670,7 @@ static void __init mxc_board_init(void)
 {
 	pr_info("AIPS1 VA base: 0x%x\n", IO_ADDRESS(AIPS1_BASE_ADDR));
 	mxc_cpu_common_init();
-	mxc_gpio_init();
+	mxc_register_gpios();
 	mx25_3stack_gpio_init();
 	early_console_setup(saved_command_line);
 	mxc_init_keypad();

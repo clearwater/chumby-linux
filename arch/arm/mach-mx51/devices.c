@@ -34,6 +34,8 @@
 
 /* Flag used to indicate when IRAM has been initialized */
 int iram_ready;
+/* Flag used to indicate if dvfs_core is active. */
+int dvfs_core_is_active;
 
 void mxc_sdma_get_script_info(sdma_script_start_addrs * sdma_script_addr)
 {
@@ -384,12 +386,13 @@ static struct platform_device mxc_scc_device = {
 	.name = "mxc_scc",
 	.id = 0,
 };
-
 static void mxc_init_scc(void)
 {
 	platform_device_register(&mxc_scc_device);
 }
 #else
+#define SCM_RD_DELAY	1000000 /* in nanoseconds */
+#define SEC_TO_NANOSEC  1000000000 /*Second to nanoseconds */
 static inline void mxc_init_scc(void)
 {
 	uint32_t reg_value;
@@ -402,6 +405,11 @@ static inline void mxc_init_scc(void)
 	void *scm_ram_base;
 	void *scc_base;
 	uint8_t iram_partitions = 16;
+	struct timespec stime;
+	struct timespec curtime;
+	long scm_rd_timeout = 0;
+	long cur_ns = 0;
+	long start_ns = 0;
 
 	if (cpu_is_mx51_rev(CHIP_REV_2_0) < 0)
 		iram_partitions = 12;
@@ -417,27 +425,139 @@ static inline void mxc_init_scc(void)
 		return;
 	}
 
-	for (partition_no = 0; partition_no < iram_partitions; partition_no++) {
-		/*De-allocate a Partition*/
-		reg_value = ((partition_no << SCM_ZCMD_PART_SHIFT) &
-			     SCM_ZCMD_PART_MASK) | ((0x03 <<
-						     SCM_ZCMD_CCMD_SHIFT)
-						    & SCM_ZCMD_CCMD_MASK);
+	/* Wait for any running SCC operations to finish or fail */
+	getnstimeofday(&stime);
+	do {
+		reg_value = __raw_readl(scc_base + SCM_STATUS_REG);
+		getnstimeofday(&curtime);
+		if (curtime.tv_nsec > stime.tv_nsec)
+			scm_rd_timeout = curtime.tv_nsec - stime.tv_nsec;
+		else{
+			/*Converted second to nanosecond and add to
+			nsec when current nanosec is less than
+			start time nanosec.*/
+			cur_ns = (curtime.tv_sec * SEC_TO_NANOSEC) +
+			curtime.tv_nsec;
+			start_ns = (stime.tv_sec * SEC_TO_NANOSEC) +
+				stime.tv_nsec;
+			scm_rd_timeout = cur_ns - start_ns;
+		}
+	} while (((reg_value & SCM_STATUS_SRS_MASK) != SCM_STATUS_SRS_READY)
+	&& ((reg_value & SCM_STATUS_SRS_MASK) != SCM_STATUS_SRS_FAIL));
+
+	/* Check for failures */
+	if ((reg_value & SCM_STATUS_SRS_MASK) != SCM_STATUS_SRS_READY) {
+		/* Special message for bad secret key fuses */
+		if (reg_value & SCM_STATUS_KST_BAD_KEY)
+			printk(KERN_ERR "INVALID SCC KEY FUSE PATTERN\n");
+		else
+		    printk(KERN_ERR "SECURE RAM FAILURE\n");
+
+		iounmap(scm_ram_base);
+		iounmap(scc_base);
+		return;
+	}
+
+	scm_rd_timeout = 0;
+	/* Release final two partitions for SCC2 driver */
+	scc_partno = iram_partitions - (SCC_IRAM_SIZE / SZ_8K);
+	for (partition_no = scc_partno; partition_no < iram_partitions;
+	     partition_no++) {
+		reg_value = (((partition_no << SCM_ZCMD_PART_SHIFT) &
+			SCM_ZCMD_PART_MASK) | ((0x03 << SCM_ZCMD_CCMD_SHIFT) &
+			SCM_ZCMD_CCMD_MASK));
 		__raw_writel(reg_value, scc_base + SCM_ZCMD_REG);
-		msleep(1);
-		while ((__raw_readl(scc_base + SCM_STATUS_REG) &
-			SCM_STATUS_SRS_READY) != SCM_STATUS_SRS_READY) ;
+		udelay(1);
+		/* Wait for zeroization to complete */
+		getnstimeofday(&stime);
+	    do {
+			reg_value = __raw_readl(scc_base + SCM_STATUS_REG);
+		    getnstimeofday(&curtime);
+			if (curtime.tv_nsec > stime.tv_nsec)
+				scm_rd_timeout = curtime.tv_nsec -
+				stime.tv_nsec;
+			else {
+				/*Converted second to nanosecond and add to
+				nsec when current nanosec is less than
+				start time nanosec.*/
+				cur_ns = (curtime.tv_sec * SEC_TO_NANOSEC) +
+				curtime.tv_nsec;
+				start_ns = (stime.tv_sec * SEC_TO_NANOSEC) +
+					stime.tv_nsec;
+				scm_rd_timeout = cur_ns - start_ns;
+		    }
+	    } while (((reg_value & SCM_STATUS_SRS_MASK) !=
+	    SCM_STATUS_SRS_READY) && ((reg_value & SCM_STATUS_SRS_MASK) !=
+	    SCM_STATUS_SRS_FAIL) && (scm_rd_timeout <= SCM_RD_DELAY));
 
-		/*In Supervisor mode claims a partition for it's own use
-		    by writing zero to SMID register.*/
-		__raw_writel(0, scc_base + (SCM_SMID0_REG + 8 * partition_no));
+		if (scm_rd_timeout > SCM_RD_DELAY)
+			printk(KERN_ERR "SCM Status Register Read timeout"
+			"for Partition No:%d", partition_no);
 
+		if ((reg_value & SCM_STATUS_SRS_MASK) != SCM_STATUS_SRS_READY)
+			break;
+	}
+
+	/*Check all expected partitions released */
+	reg_value = __raw_readl(scc_base + SCM_PART_OWNERS_REG);
+	if ((reg_value & reg_mask) != 0) {
+		printk(KERN_ERR "FAILED TO RELEASE IRAM PARTITION\n");
+		iounmap(scm_ram_base);
+		iounmap(scc_base);
+		return;
+	}
+	reg_mask = 0;
+	scm_rd_timeout = 0;
+	/* Allocate remaining partitions for general use */
+	for (partition_no = 0; partition_no < scc_partno; partition_no++) {
+		/* Supervisor mode claims a partition for it's own use
+		by writing zero to SMID register.*/
+	    __raw_writel(0, scc_base + (SCM_SMID0_REG + 8 * partition_no));
+
+		/* Wait for any zeroization to complete */
+		getnstimeofday(&stime);
+	    do {
+			reg_value = __raw_readl(scc_base + SCM_STATUS_REG);
+		    getnstimeofday(&curtime);
+		    if (curtime.tv_nsec > stime.tv_nsec)
+				scm_rd_timeout = curtime.tv_nsec -
+				stime.tv_nsec;
+			else{
+				/*Converted second to nanosecond and add to
+				nsec when current nanosec is less than
+				start time nanosec.*/
+				cur_ns = (curtime.tv_sec * SEC_TO_NANOSEC) +
+				curtime.tv_nsec;
+				start_ns = (stime.tv_sec * SEC_TO_NANOSEC) +
+					stime.tv_nsec;
+				scm_rd_timeout = cur_ns - start_ns;
+			}
+	    } while (((reg_value & SCM_STATUS_SRS_MASK) !=
+	    SCM_STATUS_SRS_READY) && ((reg_value & SCM_STATUS_SRS_MASK) !=
+	    SCM_STATUS_SRS_FAIL) && (scm_rd_timeout <= SCM_RD_DELAY));
+
+		if (scm_rd_timeout > SCM_RD_DELAY)
+			printk(KERN_ERR "SCM Status Register Read timeout"
+			"for Partition No:%d", partition_no);
+
+		if ((reg_value & SCM_STATUS_SRS_MASK) != SCM_STATUS_SRS_READY)
+			break;
+		/* Set UMID=0 and permissions for universal data
+		read/write access */
+		MAP_base = scm_ram_base + (partition_no * 0x2000);
+		UMID_base = (uint8_t *) MAP_base + 0x10;
+		for (i = 0; i < 16; i++)
+			UMID_base[i] = 0;
+
+		MAP_base[0] = (SCM_PERM_NO_ZEROIZE | SCM_PERM_HD_SUP_DISABLE |
+			SCM_PERM_HD_READ | SCM_PERM_HD_WRITE |
+			SCM_PERM_HD_EXECUTE | SCM_PERM_TH_READ |
+			SCM_PERM_TH_WRITE);
 		reg_mask |= (3 << (2 * (partition_no)));
 	}
 
-	msleep(1);
+	/* Check all expected partitions allocated */
 	reg_value = __raw_readl(scc_base + SCM_PART_OWNERS_REG);
-
 	if ((reg_value & reg_mask) != reg_mask) {
 		printk(KERN_ERR "FAILED TO ACQUIRE IRAM PARTITION\n");
 		iounmap(scm_ram_base);
@@ -445,32 +565,6 @@ static inline void mxc_init_scc(void)
 		return;
 	}
 
-	for (partition_no = 0; partition_no < iram_partitions; partition_no++) {
-		MAP_base = scm_ram_base + (partition_no * 0x2000);
-		UMID_base = (uint8_t *) MAP_base + 0x10;
-
-		for (i = 0; i < 16; i++)
-			UMID_base[i] = 0;
-
-		MAP_base[0] = SCM_PERM_NO_ZEROIZE | SCM_PERM_HD_SUP_DISABLE |
-		    SCM_PERM_HD_READ | SCM_PERM_HD_WRITE |
-		    SCM_PERM_TH_READ | SCM_PERM_TH_WRITE;
-
-	}
-
-	/* Freeing 2 partitions for SCC2 */
-	scc_partno = iram_partitions - (SCC_IRAM_SIZE / SZ_8K);
-	for (partition_no = scc_partno; partition_no < iram_partitions;
-	     partition_no++) {
-		reg_value = ((partition_no << SCM_ZCMD_PART_SHIFT) &
-			     SCM_ZCMD_PART_MASK) | ((0x03 <<
-						     SCM_ZCMD_CCMD_SHIFT)
-						    & SCM_ZCMD_CCMD_MASK);
-		__raw_writel(reg_value, scc_base + SCM_ZCMD_REG);
-		msleep(1);
-		while ((__raw_readl(scc_base + SCM_STATUS_REG) &
-			SCM_STATUS_SRS_READY) != SCM_STATUS_SRS_READY) ;
-	}
 	iounmap(scm_ram_base);
 	iounmap(scc_base);
 	printk(KERN_INFO "IRAM READY\n");
@@ -893,35 +987,40 @@ static inline void mxc_init_dvfs(void)
 }
 
 struct mxc_gpio_port mxc_gpio_ports[GPIO_PORT_NUM] = {
-	{
-	 .num = 0,
+	[0] = {
+	 .chip.label = "gpio-0",
 	 .base = IO_ADDRESS(GPIO1_BASE_ADDR),
-	 .irq_0_15 = MXC_INT_GPIO1_LOW,
-	 .irq_16_31 = MXC_INT_GPIO1_HIGH,
-	 .virtual_irq_start = MXC_GPIO_INT_BASE,
+	 .irq = MXC_INT_GPIO1_LOW,
+	 .irq_high = MXC_INT_GPIO1_HIGH,
+	 .virtual_irq_start = MXC_GPIO_INT_BASE
 	 },
-	{
-	 .num = 1,
+	[1] = {
+	 .chip.label = "gpio-1",
 	 .base = IO_ADDRESS(GPIO2_BASE_ADDR),
-	 .irq_0_15 = MXC_INT_GPIO2_LOW,
-	 .irq_16_31 = MXC_INT_GPIO2_HIGH,
-	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN * 1,
+	 .irq = MXC_INT_GPIO2_LOW,
+	 .irq_high = MXC_INT_GPIO2_HIGH,
+	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN * 1
 	 },
-	{
-	 .num = 2,
+	[2] = {
+	 .chip.label = "gpio-2",
 	 .base = IO_ADDRESS(GPIO3_BASE_ADDR),
-	 .irq_0_15 = MXC_INT_GPIO3_LOW,
-	 .irq_16_31 = MXC_INT_GPIO3_HIGH,
-	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN * 2,
+	 .irq = MXC_INT_GPIO3_LOW,
+	 .irq_high = MXC_INT_GPIO3_HIGH,
+	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN * 2
 	 },
-	{
-	 .num = 3,
+	[3] = {
+	 .chip.label = "gpio-3",
 	 .base = IO_ADDRESS(GPIO4_BASE_ADDR),
-	 .irq_0_15 = MXC_INT_GPIO4_LOW,
-	 .irq_16_31 = MXC_INT_GPIO4_HIGH,
-	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN * 3,
-	 },
+	 .irq = MXC_INT_GPIO4_LOW,
+	 .irq_high = MXC_INT_GPIO4_HIGH,
+	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN * 3
+	 }
 };
+
+int __init mxc_register_gpios(void)
+{
+	return mxc_gpio_init(mxc_gpio_ports, ARRAY_SIZE(mxc_gpio_ports));
+}
 
 static struct platform_device mxc_dma_device = {
 	.name = "mxc_dma",
@@ -997,6 +1096,19 @@ static inline void mxc_init_busfreq(void)
 	(void)platform_device_register(&busfreq_device);
 }
 
+static struct platform_device sdram_autogating_device = {
+	.name = "sdram_autogating",
+	.id = 0,
+	.dev = {
+		.release = mxc_nop_release,
+		},
+};
+
+static inline void mxc_init_sdram_autogating(void)
+{
+	(void)platform_device_register(&sdram_autogating_device);
+}
+
 #if defined(CONFIG_MXC_IIM) || defined(CONFIG_MXC_IIM_MODULE)
 static struct resource mxc_iim_resources[] = {
 	{
@@ -1060,6 +1172,9 @@ static struct resource mxc_gpu2d_resources[] = {
 	{
 	 .start = GPU2D_BASE_ADDR,
 	 .end = GPU2D_BASE_ADDR + SZ_4K - 1,
+	 .flags = IORESOURCE_MEM,
+	 },
+	{
 	 .flags = IORESOURCE_MEM,
 	 },
 	{
@@ -1130,6 +1245,9 @@ static inline void mxc_init_gpu2d(void)
 	dma_alloc_coherent(&mxc_gpu2d_device.dev, SZ_8K, &mxc_gpu2d_resources[1].start, GFP_DMA);
 	mxc_gpu2d_resources[1].end = mxc_gpu2d_resources[1].start + SZ_8K - 1;
 
+	dma_alloc_coherent(&mxc_gpu2d_device.dev, 88 * SZ_1K, &mxc_gpu2d_resources[2].start, GFP_DMA);
+	mxc_gpu2d_resources[2].end = mxc_gpu2d_resources[2].start + (88 * SZ_1K) - 1;
+
 	platform_device_register(&mxc_gpu2d_device);
 }
 #else
@@ -1154,6 +1272,7 @@ int __init mxc_init_devices(void)
 	mxc_init_tve();
 	mx51_init_lpmode();
 	mxc_init_busfreq();
+	mxc_init_sdram_autogating();
 	mxc_init_dvfs();
 	mxc_init_iim();
 	mxc_init_gpu();

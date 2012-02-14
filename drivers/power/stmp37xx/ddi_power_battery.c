@@ -211,6 +211,7 @@ void ddi_power_enable_5v_to_battery_handoff(void)
 void ddi_power_execute_5v_to_battery_handoff(void)
 {
 
+    // Chumby
     // Always source current off 4P2.
     HW_POWER_5VCTRL_SET(BF_POWER_5VCTRL_CHARGE_4P2_ILIMIT(0x3f));
 
@@ -419,6 +420,11 @@ int ddi_power_init_battery(void)
 {
 	int ret;
 
+
+	/* the following code to enable automatic battery measurement
+	 * should have already been enabled in the boot prep files.  Not
+	 * sure if this is necessary or possibly suceptible to mis-coordination
+	 */
 	// Init LRADC channel 7
 	ret = hw_lradc_init_ladder(BATTERY_VOLTAGE_CH,
 				   LRADC_DELAY_TRIGGER_BATTERY,
@@ -452,7 +458,7 @@ int ddi_power_init_battery(void)
 
 	HW_POWER_LOOPCTRL_SET(BM_POWER_LOOPCTRL_RCSCALE_THRESH);
 	HW_POWER_LOOPCTRL_SET(BF_POWER_LOOPCTRL_EN_RCSCALE(3));
- 
+
 	HW_POWER_MINPWR_CLR(BM_POWER_MINPWR_HALF_FETS);
 	HW_POWER_MINPWR_SET(BM_POWER_MINPWR_DOUBLE_FETS);
 

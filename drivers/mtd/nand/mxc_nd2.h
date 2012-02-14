@@ -273,10 +273,18 @@ do { \
 #define NFC_PPB_256			(3 << 7)
 #define NFC_PPB_RESET			~(3 << 7)
 
-#define NFC_BLS_LOCKED			(0 << 16)
-#define NFC_BLS_LOCKED_DEFAULT		(1 << 16)
-#define NFC_BLS_UNLCOKED		(2 << 16)
-#define NFC_BLS_RESET			~(3 << 16)
+#if defined(CONFIG_ARCH_MXC_HAS_NFC_V3_2)
+#define NFC_BLS_LOCKED			(0 << 6)
+#define NFC_BLS_LOCKED_DEFAULT		(1 << 6)
+#define NFC_BLS_UNLCOKED		(2 << 6)
+#define NFC_BLS_RESET			(~(3 << 6))
+#else
+#define NFC_BLS_LOCKED                  (0 << 16)
+#define NFC_BLS_LOCKED_DEFAULT          (1 << 16)
+#define NFC_BLS_UNLCOKED                (2 << 16)
+#define NFC_BLS_RESET                   (~(3 << 16))
+#endif
+
 #define NFC_WPC_LOCK_TIGHT		1
 #define NFC_WPC_LOCK			(1 << 1)
 #define NFC_WPC_UNLOCK			(1 << 2)
@@ -448,7 +456,8 @@ do {	\
 		NFC_SET_SPAS(GET_NAND_OOB_SIZE >> 1);	\
 		NFC_SET_ECC_MODE(GET_NAND_OOB_SIZE >> 1); \
 		NFC_SET_ST_CMD(0x70); \
-		raw_write(raw_read(NFC_CONFIG3) | 1 << 20, NFC_CONFIG3); \
+		raw_write(raw_read(NFC_CONFIG3) | NFC_NO_SDMA, NFC_CONFIG3); \
+		raw_write(raw_read(NFC_CONFIG3) | NFC_RBB_MODE, NFC_CONFIG3); \
 		SET_NFC_DELAY_LINE(0); \
 	} \
 } while (0)

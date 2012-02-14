@@ -37,8 +37,11 @@
 #include <mach/regulator.h>
 #include <mach/power.h>
 #include <mach/regs-digctl.h>
+#include <mach/regs-clkctrl.h>
 
 #define VERY_HI_RATE		2000000000
+#define CLKCTRL_PLL_PWD_BIT 16
+#define CLKCTRL_PLL_BYPASS 0x1ff
 
 static struct profile {
 	int cpu;
@@ -48,14 +51,19 @@ static struct profile {
 	int vddd;
 	int vddd_bo;
 	int cur;
+	int vddio;
+	int vdda;
+	int pll_off;
 } profiles[] = {
-	{  64000,  64000,  48000, 3, 1000000,  925000, 150000 },
-	{ 261820, 130910, 130910, 0, 1225000, 1125000, 173000 },
-	{ 360000, 120000, 120000, 0, 1350000, 1250000, 200000 },
-	{ 392730, 130910, 130910, 0, 1400000, 1300000, 225000 },
-//	{ 454740, 151580, 151580, 0, 1550000, 1450000, 355000 },
-	{ 454740, 227370, 130910, 0, 1550000, 1450000, 355000 },
-//	{ 454740, 227370, 151580, 0, 1550000, 1450000, 355000 },
+#ifdef CONFIG_STMP378X_RAM_MDDR
+	{  24000,  24000,  24000, 3, 1050000,  975000, 150000, 3075000, 1725000, 1 },
+#endif
+	{  64000,  64000,  48000, 3, 1050000,  925000, 150000, 3300000, 1750000, 0 },
+	{ 261820, 130910, 130910, 0, 1275000, 1175000, 173000, 3300000, 1750000, 0 },
+	{ 360000, 120000, 120000, 0, 13750000,1275000, 200000, 3300000, 1750000, 0 },
+	{ 392730, 130910, 130910, 0, 1475000, 1375000, 225000, 3300000, 1750000, 0 },
+//	{ 454740, 151580, 130910, 0, 1550000, 1450000, 355000, 3300000, 1750000, 0 },
+	{ 454740, 227370, 130910, 0, 1550000, 1450000, 355000, 3300000, 1750000, 0 }, // Chumby
 };
 
 static struct stmp3xxx_cpufreq {
@@ -67,6 +75,8 @@ static struct stmp3xxx_cpufreq {
 	int next_freq_id;
 	spinlock_t lock;
 } cpufreq_bdata;
+
+static u32 clkseq_setting;
 
 static int reg_callback(struct notifier_block *, unsigned long, void *);
 static int init_reg_callback(struct notifier_block *, unsigned long, void *);
@@ -151,7 +161,7 @@ static unsigned int stmp3xxx_getspeed(unsigned int cpu)
 static int set_op(unsigned int target_freq)
 {
 	struct clk *cpu_clk, *ahb_clk, *emi_clk;
-	struct regulator *vddd, *vdddbo, *cur_limit;
+	struct regulator *vddd, *vdddbo, *cur_limit, *vddio, *vdda;
 	struct cpufreq_freqs freqs;
 	int ret = 0, i;
     static int is_first_run = 1;
@@ -178,6 +188,16 @@ static int set_op(unsigned int target_freq)
 	vdddbo = regulator_get(NULL, "vddd_bo");
 	if (IS_ERR(vdddbo))
 		vdddbo = NULL;
+	vddio = regulator_get(NULL, "vddio");
+	if (IS_ERR(vddio)) {
+		vddio = NULL;
+		pr_warning("unable to get vddio");
+	}
+	vdda = regulator_get(NULL, "vdda");
+	if (IS_ERR(vdda)) {
+		vdda = NULL;
+		pr_warning("unable to get vddio");
+	}
 
 	freqs.old = clk_get_rate(cpu_clk);
 	freqs.cpu = 0;
@@ -222,6 +242,14 @@ static int set_op(unsigned int target_freq)
 		i, freqs.old, freqs.new);
 
 	spin_lock(&cpufreq_bdata.lock);
+
+	if (freqs.old == 24000 && freqs.new > 24000) {
+		/* turn pll on */
+		HW_CLKCTRL_PLLCTRL0_SET(CLKCTRL_PLL_PWD_BIT);
+		udelay(10);
+	} else if (freqs.old > 24000 && freqs.new == 24000)
+		clkseq_setting = HW_CLKCTRL_CLKSEQ_RD();
+
 	if (cur_limit && (freqs.old < freqs.new)) {
 		ret = regulator_set_current_limit(cur_limit, profiles[i].cur, profiles[i].cur);
 		if (ret)
@@ -240,23 +268,48 @@ static int set_op(unsigned int target_freq)
 				      BF_DIGCTL_ARMCACHE_CACHE_SS(ss) |
 				      BF_DIGCTL_ARMCACHE_DTAG_SS(ss) |
 				      BF_DIGCTL_ARMCACHE_ITAG_SS(ss));
-		if (vddd && vdddbo) {
+		if (vddd && vdddbo && vddio && vdda) {
 			ret = regulator_set_voltage(vddd, profiles[i].vddd, profiles[i].vddd);
 			if (ret)
 				ret = regulator_set_voltage(vddd,
 							    profiles[i].vddd,
 							    profiles[i].vddd);
 			regulator_set_voltage(vdddbo, profiles[i].vddd_bo, profiles[i].vddd_bo);
+
+			ret = regulator_set_voltage(vddio, profiles[i].vddio,
+							profiles[i].vddio);
+			if (ret)
+				ret = regulator_set_voltage(vddio,
+							    profiles[i].vddio,
+							    profiles[i].vddio);
+			ret = regulator_set_voltage(vdda, profiles[i].vdda,
+							profiles[i].vdda);
+			if (ret)
+				ret = regulator_set_voltage(vdda,
+							    profiles[i].vdda,
+							    profiles[i].vdda);
 		}
 	} else if(freqs.old < freqs.new) {
 		int ss = profiles[i].ss;
-		if (vddd && vdddbo) {
+		if (vddd && vdddbo && vddio && vdda) {
 			ret = regulator_set_voltage(vddd, profiles[i].vddd, profiles[i].vddd);
 			if (ret)
 				ret = regulator_set_voltage(vddd,
 							    profiles[i].vddd,
 							    profiles[i].vddd);
 			regulator_set_voltage(vdddbo, profiles[i].vddd_bo, profiles[i].vddd_bo);
+			ret = regulator_set_voltage(vddio, profiles[i].vddio,
+							profiles[i].vddio);
+			if (ret)
+				ret = regulator_set_voltage(vddio,
+							    profiles[i].vddio,
+							    profiles[i].vddio);
+			ret = regulator_set_voltage(vdda, profiles[i].vdda,
+							profiles[i].vdda);
+			if (ret)
+				ret = regulator_set_voltage(vdda,
+							    profiles[i].vdda,
+							    profiles[i].vdda);
 		}
 		HW_DIGCTL_ARMCACHE_WR(BF_DIGCTL_ARMCACHE_VALID_SS(ss) |
 				      BF_DIGCTL_ARMCACHE_DRTY_SS(ss) |
@@ -269,6 +322,13 @@ static int set_op(unsigned int target_freq)
 	}
 	udelay(100);
 
+	if (freqs.old > 24000 && freqs.new == 24000) {
+		/* turn pll off */
+		HW_CLKCTRL_PLLCTRL0_CLR(CLKCTRL_PLL_PWD_BIT);
+		HW_CLKCTRL_CLKSEQ_WR(CLKCTRL_PLL_BYPASS);
+	} else if (freqs.old == 24000 && freqs.new > 24000)
+		HW_CLKCTRL_CLKSEQ_WR(clkseq_setting);
+
 	cpufreq_notify_transition(&freqs, CPUFREQ_POSTCHANGE);
 
 	if (cur_limit && (freqs.old > freqs.new))	/* will not fail */
@@ -280,6 +340,10 @@ out_cur:
 	spin_unlock(&cpufreq_bdata.lock);
 	if (vddd)
 		regulator_put(vddd);
+	if (vddio)
+		regulator_put(vddio);
+	if (vdda)
+		regulator_put(vdda);
 out_vddd:
 	clk_put(emi_clk);
 out_emi:

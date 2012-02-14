@@ -404,8 +404,9 @@ void gpio_sdhc_active(int module)
 		 * SW workaround for the eSDHC1 Write Protected feature
 		 * The PSR of CSPI1_SS0 (GPIO3_2) should be read.
 		 */
-		mxc_set_gpio_direction(MX37_PIN_CSPI1_SS0, 0);
-		mxc_set_gpio_dataout(MX37_PIN_CSPI1_SS0, 1);
+		gpio_request(IOMUX_TO_GPIO(MX37_PIN_CSPI1_SS0), "cspi1_ss0");
+		gpio_direction_output(IOMUX_TO_GPIO(MX37_PIN_CSPI1_SS0), 0);
+		gpio_set_value(IOMUX_TO_GPIO(MX37_PIN_CSPI1_SS0), 1);
 		break;
 	case 1:
 		mxc_request_iomux(MX37_PIN_SD2_CLK,
@@ -546,12 +547,13 @@ EXPORT_SYMBOL(gpio_sdhc_inactive);
 int sdhc_get_card_det_status(struct device *dev)
 {
 	int ret;
+	u32 gpio = IOMUX_TO_GPIO(MX37_PIN_OWIRE_LINE);
 
 	if (to_platform_device(dev)->id == 0) {
 		if (board_is_mx37(BOARD_REV_2))
-			ret = mxc_get_gpio_datain(MX37_PIN_GPIO1_4);
+			ret = gpio_get_value(IOMUX_TO_GPIO(MX37_PIN_GPIO1_4));
 		else
-			ret = mxc_get_gpio_datain(MX37_PIN_OWIRE_LINE);
+			ret = gpio_get_value(gpio);
 		return ret;
 	} else {		/* config the det pin for SDHC2 */
 		return 0;
@@ -565,17 +567,22 @@ EXPORT_SYMBOL(sdhc_get_card_det_status);
  */
 int sdhc_init_card_det(int id)
 {
+	u32 gpio;
+
 	if (id == 0) {
 		if (board_is_mx37(BOARD_REV_2)) {
+			gpio = IOMUX_TO_GPIO(MX37_PIN_GPIO1_4);
 			mxc_request_iomux(MX37_PIN_GPIO1_4, IOMUX_CONFIG_ALT0);
 			mxc_iomux_set_pad(MX37_PIN_GPIO1_4,
 					  PAD_CTL_DRV_HIGH |
 					  PAD_CTL_HYS_NONE |
 					  PAD_CTL_ODE_OPENDRAIN_NONE |
 					  PAD_CTL_PKE_NONE | PAD_CTL_SRE_FAST);
-			mxc_set_gpio_direction(MX37_PIN_GPIO1_4, 1);
+			gpio_request(gpio, "gpio1_4");
+			gpio_direction_input(gpio);
 			return IOMUX_TO_IRQ(MX37_PIN_GPIO1_4);
 		} else {
+			gpio = IOMUX_TO_GPIO(MX37_PIN_OWIRE_LINE);
 			mxc_request_iomux(MX37_PIN_OWIRE_LINE,
 					  IOMUX_CONFIG_ALT4);
 			mxc_iomux_set_pad(MX37_PIN_OWIRE_LINE,
@@ -583,7 +590,8 @@ int sdhc_init_card_det(int id)
 					  PAD_CTL_HYS_NONE |
 					  PAD_CTL_ODE_OPENDRAIN_NONE |
 					  PAD_CTL_PKE_NONE | PAD_CTL_SRE_FAST);
-			mxc_set_gpio_direction(MX37_PIN_OWIRE_LINE, 1);
+			gpio_request(gpio, "owire_line");
+			gpio_direction_input(gpio);
 			return IOMUX_TO_IRQ(MX37_PIN_OWIRE_LINE);
 		}
 	} else {		/* config the det pin for SDHC2 */
@@ -601,7 +609,7 @@ int sdhc_write_protect(struct device *dev)
 {
 	unsigned short rc = 0;
 
-	rc = mxc_get_gpio_datain(MX37_PIN_CSPI1_SS0);
+	rc = gpio_get_value(IOMUX_TO_GPIO(MX37_PIN_CSPI1_SS0));
 	if (rc > 0)
 		return 1;
 	else
@@ -846,12 +854,13 @@ void gpio_keypad_active(void)
   PAD_CTL_DDR_INPUT_CMOS | PAD_CTL_DRV_VOT_LOW);
 	/*KEY_WAKE */
 	mxc_iomux_set_pad(MX37_PIN_DISP1_DAT18, pad_val);
-
-	mxc_set_gpio_direction(MX37_PIN_DISP1_DAT18, 0);
-	mxc_set_gpio_direction(MX37_PIN_GPIO1_3, 1);
+	gpio_request(IOMUX_TO_GPIO(MX37_PIN_DISP1_DAT18), "disp1_dat18");
+	gpio_direction_output(IOMUX_TO_GPIO(MX37_PIN_DISP1_DAT18), 0);
+	gpio_request(IOMUX_TO_GPIO(MX37_PIN_GPIO1_3), "gpio1_3");
+	gpio_direction_input(IOMUX_TO_GPIO(MX37_PIN_GPIO1_3));
 
 	/* drive initial value */
-	mxc_set_gpio_dataout(MX37_PIN_DISP1_DAT18, 1);
+	gpio_set_value(IOMUX_TO_GPIO(MX37_PIN_DISP1_DAT18), 1);
 }
 
 EXPORT_SYMBOL(gpio_keypad_active);
@@ -950,7 +959,8 @@ void gpio_pmic_active(void)
 			  PAD_CTL_100K_PU |
 			  PAD_CTL_HYS_ENABLE |
 			  PAD_CTL_DRV_VOT_HIGH | PAD_CTL_DDR_INPUT_CMOS);
-	mxc_set_gpio_direction(MX37_PIN_OWIRE_LINE, 1);
+	gpio_request(IOMUX_TO_GPIO(MX37_PIN_OWIRE_LINE), "owire_line");
+	gpio_direction_input(IOMUX_TO_GPIO(MX37_PIN_OWIRE_LINE));
 }
 
 EXPORT_SYMBOL(gpio_pmic_active);
@@ -963,20 +973,22 @@ void gpio_gps_active(void)
 			  PAD_CTL_DRV_HIGH | PAD_CTL_HYS_NONE |
 			  PAD_CTL_ODE_OPENDRAIN_NONE |
 			  PAD_CTL_PKE_ENABLE | PAD_CTL_SRE_FAST);
-	mxc_set_gpio_direction(MX37_PIN_EIM_OE, 0);
+	gpio_request(IOMUX_TO_GPIO(MX37_PIN_EIM_OE), "eim_oe");
+	gpio_direction_output(IOMUX_TO_GPIO(MX37_PIN_EIM_OE), 0);
 
 	/* RESET */
 	mxc_request_iomux(MX37_PIN_EIM_BCLK, IOMUX_CONFIG_GPIO);
 	mxc_iomux_set_pad(MX37_PIN_EIM_BCLK, PAD_CTL_DRV_HIGH |
 			  PAD_CTL_HYS_NONE | PAD_CTL_ODE_OPENDRAIN_NONE |
 			  PAD_CTL_PKE_ENABLE | PAD_CTL_SRE_FAST);
-	mxc_set_gpio_direction(MX37_PIN_EIM_BCLK, 0);
+	gpio_request(IOMUX_TO_GPIO(MX37_PIN_EIM_BCLK), "eim_bclk");
+	gpio_direction_output(IOMUX_TO_GPIO(MX37_PIN_EIM_BCLK), 0);
 
-	mxc_set_gpio_dataout(MX37_PIN_EIM_OE, 0);
-	mxc_set_gpio_dataout(MX37_PIN_EIM_BCLK, 0);
+	gpio_set_value(IOMUX_TO_GPIO(MX37_PIN_EIM_OE), 0);
+	gpio_set_value(IOMUX_TO_GPIO(MX37_PIN_EIM_BCLK), 0);
 
 	msleep(5);
-	mxc_set_gpio_dataout(MX37_PIN_EIM_BCLK, 1);
+	gpio_set_value(IOMUX_TO_GPIO(MX37_PIN_EIM_BCLK), 1);
 
 	msleep(5);
 }
@@ -989,11 +1001,11 @@ int gpio_gps_access(int para)
 	pin = (para & 0x1) ? MX37_PIN_EIM_OE : MX37_PIN_EIM_BCLK;
 
 	if (para & 0x4)
-		return mxc_get_gpio_datain(pin);
+		return gpio_get_value(IOMUX_TO_GPIO(pin));
 	else if (para & 0x2)
-		mxc_set_gpio_dataout(pin, 1);
+		gpio_set_value(IOMUX_TO_GPIO(pin), 1);
 	else
-		mxc_set_gpio_dataout(pin, 0);
+		gpio_set_value(IOMUX_TO_GPIO(pin), 0);
 
 	return 0;
 }
@@ -1010,7 +1022,7 @@ EXPORT_SYMBOL(gpio_gps_inactive);
 
 int headphone_det_status(void)
 {
-	return mxc_get_gpio_datain(MX37_PIN_AUD5_RXFS);
+	return gpio_get_value(IOMUX_TO_GPIO(MX37_PIN_AUD5_RXFS));
 }
 
 EXPORT_SYMBOL(headphone_det_status);

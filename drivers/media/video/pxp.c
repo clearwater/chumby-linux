@@ -46,6 +46,14 @@
 
 #define V4L2_OUTPUT_TYPE_INTERNAL	4
 
+#define REG_OFFSET	0x10
+#define REGS1_NUMS	16
+#define REGS2_NUMS	5
+#define REGS3_NUMS	32
+static u32 regs1[REGS1_NUMS];
+static u32 regs2[REGS2_NUMS];
+static u32 regs3[REGS3_NUMS];
+
 static struct pxp_data_format pxp_s0_formats[] = {
 	{
 		.name = "24-bit RGB",
@@ -119,6 +127,15 @@ struct v4l2_queryctrl pxp_controls[] = {
 		.type		= V4L2_CTRL_TYPE_INTEGER,
 	}, {
 		.id		= V4L2_CID_PRIVATE_BASE + 2,
+		.name		= "Set S0 Chromakey",
+		.minimum	= -1,
+		.maximum	= 0xFFFFFF,
+		.step		= 1,
+		.default_value	= -1,
+		.flags		= 0,
+		.type		= V4L2_CTRL_TYPE_INTEGER,
+	}, {
+		.id		= V4L2_CID_PRIVATE_BASE + 3,
 		.name		= "YUV Colorspace",
 		.minimum	= 0,
 		.maximum	= 1,
@@ -162,11 +179,30 @@ static void pxp_set_rgbbuf(struct pxps *pxp)
 			  BF_PXP_RGBSIZE_HEIGHT(pxp->fb.fmt.height));
 }
 
-static void pxp_set_colorkey(struct pxps *pxp)
+static void pxp_set_s0colorkey(struct pxps *pxp)
 {
 	/* Low and high are set equal. V4L does not allow a chromakey range */
-	HW_PXP_S0COLORKEYLOW_WR(pxp->chromakey);
-	HW_PXP_S0COLORKEYHIGH_WR(pxp->chromakey);
+	if (pxp->s0_chromakey == -1) {
+		/* disable color key */
+		HW_PXP_S0COLORKEYLOW_WR(0xFFFFFF);
+		HW_PXP_S0COLORKEYHIGH_WR(0x0);
+	} else {
+		HW_PXP_S0COLORKEYLOW_WR(pxp->s0_chromakey);
+		HW_PXP_S0COLORKEYHIGH_WR(pxp->s0_chromakey);
+	}
+}
+
+static void pxp_set_s1colorkey(struct pxps *pxp)
+{
+	/* Low and high are set equal. V4L does not allow a chromakey range */
+	if (pxp->s1_chromakey_state != 0 && pxp->s1_chromakey != -1) {
+		HW_PXP_OLCOLORKEYLOW_WR(pxp->s1_chromakey);
+		HW_PXP_OLCOLORKEYHIGH_WR(pxp->s1_chromakey);
+	} else {
+		/* disable color key */
+		HW_PXP_OLCOLORKEYLOW_WR(0xFFFFFF);
+		HW_PXP_OLCOLORKEYHIGH_WR(0x0);
+	}
 }
 
 static void pxp_set_oln(struct pxps *pxp)
@@ -191,7 +227,7 @@ static void pxp_set_olparam(struct pxps *pxp)
 	if (pxp->global_alpha_state)
 		olparam |= BF_PXP_OLnPARAM_ALPHA_CNTL(
 				BV_PXP_OLnPARAM_ALPHA_CNTL__Override);
-	if (pxp->chromakey_state)
+	if (pxp->s1_chromakey_state)
 		olparam |= BM_PXP_OLnPARAM_ENABLE_COLORKEY;
 	if (pxp->overlay_state)
 		olparam |= BM_PXP_OLnPARAM_ENABLE;
@@ -204,8 +240,8 @@ static void pxp_set_s0param(struct pxps *pxp)
 
 	s0param = BF_PXP_S0PARAM_XBASE(pxp->drect.left >> 3);
 	s0param |= BF_PXP_S0PARAM_YBASE(pxp->drect.top >> 3);
-	s0param |= BF_PXP_S0PARAM_WIDTH(pxp->srect.width >> 3);
-	s0param |= BF_PXP_S0PARAM_HEIGHT(pxp->srect.height >> 3);
+	s0param |= BF_PXP_S0PARAM_WIDTH(pxp->s0_width >> 3);
+	s0param |= BF_PXP_S0PARAM_HEIGHT(pxp->s0_height >> 3);
 	HW_PXP_S0PARAM_WR(s0param);
 }
 
@@ -305,6 +341,9 @@ static int pxp_set_cstate(struct pxps *pxp, struct v4l2_control *vc)
 		pxp->s0_bgcolor = vc->value;
 		pxp_set_s0bg(pxp);
 	} else if (vc->id == V4L2_CID_PRIVATE_BASE + 2) {
+		pxp->s0_chromakey = vc->value;
+		pxp_set_s0colorkey(pxp);
+	} else if (vc->id == V4L2_CID_PRIVATE_BASE + 3) {
 		pxp->yuv = vc->value;
 		pxp_set_csc(pxp);
 	}
@@ -325,6 +364,8 @@ static int pxp_get_cstate(struct pxps *pxp, struct v4l2_control *vc)
 	else if (vc->id == V4L2_CID_PRIVATE_BASE + 1)
 		vc->value = pxp->s0_bgcolor;
 	else if (vc->id == V4L2_CID_PRIVATE_BASE + 2)
+		vc->value = pxp->s0_chromakey;
+	else if (vc->id == V4L2_CID_PRIVATE_BASE + 3)
 		vc->value = pxp->yuv;
 
 	return 0;
@@ -418,8 +459,8 @@ static int pxp_g_fmt_video_output(struct file *file, void *fh,
 	struct pxps *pxp = video_get_drvdata(video_devdata(file));
 	struct pxp_data_format *fmt = pxp->s0_fmt;
 
-	pf->width = pxp->srect.width;
-	pf->height = pxp->srect.height;
+	pf->width = pxp->s0_width;
+	pf->height = pxp->s0_height;
 	pf->pixelformat = fmt->fourcc;
 	pf->field = V4L2_FIELD_NONE;
 	pf->bytesperline = fmt->bpp * pf->width;
@@ -478,8 +519,8 @@ static int pxp_s_fmt_video_output(struct file *file, void *fh,
 
 	if (ret == 0) {
 		pxp->s0_fmt = pxp_get_format(f);
-		pxp->srect.width = pf->width;
-		pxp->srect.height = pf->height;
+		pxp->s0_width = pf->width;
+		pxp->s0_height = pf->height;
 		pxp_set_ctrl(pxp);
 		pxp_set_s0param(pxp);
 	}
@@ -494,7 +535,7 @@ static int pxp_g_fmt_output_overlay(struct file *file, void *fh,
 	struct v4l2_window *wf = &f->fmt.win;
 
 	memset(wf, 0, sizeof(struct v4l2_window));
-	wf->chromakey = pxp->chromakey;
+	wf->chromakey = pxp->s1_chromakey;
 	wf->global_alpha = pxp->global_alpha;
 	wf->field = V4L2_FIELD_NONE;
 	wf->clips = NULL;
@@ -513,19 +554,22 @@ static int pxp_try_fmt_output_overlay(struct file *file, void *fh,
 {
 	struct pxps *pxp = video_get_drvdata(video_devdata(file));
 	struct v4l2_window *wf = &f->fmt.win;
-	u32 chromakey = wf->chromakey;
+	struct v4l2_rect srect;
+	u32 s1_chromakey = wf->chromakey;
 	u8 global_alpha = wf->global_alpha;
+
+	memcpy(&srect, &(wf->w), sizeof(struct v4l2_rect));
 
 	pxp_g_fmt_output_overlay(file, fh, f);
 
-	wf->chromakey = chromakey;
+	wf->chromakey = s1_chromakey;
 	wf->global_alpha = global_alpha;
 
 	/* Constrain parameters to the input buffer */
-	wf->w.left = pxp->srect.left;
-	wf->w.top = pxp->srect.top;
-	wf->w.width = pxp->srect.width;
-	wf->w.height = pxp->srect.height;
+	wf->w.left = srect.left;
+	wf->w.top = srect.top;
+	wf->w.width = min(srect.width, ((__s32)pxp->s0_width - wf->w.left));
+	wf->w.height = min(srect.height, ((__s32)pxp->s0_height - wf->w.top));
 
 	return 0;
 }
@@ -543,12 +587,12 @@ static int pxp_s_fmt_output_overlay(struct file *file, void *fh,
 		pxp->srect.width = wf->w.width;
 		pxp->srect.height = wf->w.height;
 		pxp->global_alpha = wf->global_alpha;
-		pxp->chromakey = wf->chromakey;
+		pxp->s1_chromakey = wf->chromakey;
 		pxp_set_s0param(pxp);
 		pxp_set_s0crop(pxp);
 		pxp_set_scaling(pxp);
 		pxp_set_olparam(pxp);
-		pxp_set_colorkey(pxp);
+		pxp_set_s1colorkey(pxp);
 	}
 
 	return ret;
@@ -625,7 +669,7 @@ static int pxp_buf_setup(struct videobuf_queue *q,
 {
 	struct pxps *pxp = q->priv_data;
 
-	*size = pxp->srect.width * pxp->srect.height * pxp->s0_fmt->bpp;
+	*size = pxp->s0_width * pxp->s0_height * pxp->s0_fmt->bpp;
 
 	if (0 == *count)
 		*count = PXP_DEF_BUFS;
@@ -650,8 +694,8 @@ static int pxp_buf_prepare(struct videobuf_queue *q,
 	struct pxps *pxp = q->priv_data;
 	int ret = 0;
 
-	vb->width = pxp->srect.width;
-	vb->height = pxp->srect.height;
+	vb->width = pxp->s0_width;
+	vb->height = pxp->s0_height;
 	vb->size = vb->width * vb->height * pxp->s0_fmt->bpp;
 	vb->field = V4L2_FIELD_NONE;
 	vb->state = VIDEOBUF_NEEDS_INIT;
@@ -682,8 +726,8 @@ static void pxp_buf_output(struct pxps *pxp)
 			int s = 1;	/* default to YUV 4:2:2 */
 			if (pxp->s0_fmt->fourcc == V4L2_PIX_FMT_YUV420)
 				s = 2;
-			U = Y + (pxp->srect.width * pxp->srect.height);
-			V = U + ((pxp->srect.width * pxp->srect.height) >> s);
+			U = Y + (pxp->s0_width * pxp->s0_height);
+			V = U + ((pxp->s0_width * pxp->s0_height) >> s);
 			HW_PXP_S0UBUF_WR(U);
 			HW_PXP_S0VBUF_WR(V);
 		}
@@ -758,7 +802,7 @@ static int pxp_g_fbuf(struct file *file, void *priv,
 		fb->flags |= V4L2_FBUF_FLAG_GLOBAL_ALPHA;
 	if (pxp->local_alpha_state)
 		fb->flags |= V4L2_FBUF_FLAG_LOCAL_ALPHA;
-	if (pxp->chromakey_state)
+	if (pxp->s1_chromakey_state)
 		fb->flags |= V4L2_FBUF_FLAG_CHROMAKEY;
 
 	return 0;
@@ -778,7 +822,7 @@ static int pxp_s_fbuf(struct file *file, void *priv,
 	/* Global alpha overrides local alpha if both are requested */
 	if (pxp->global_alpha_state && pxp->local_alpha_state)
 		pxp->local_alpha_state = 0;
-	pxp->chromakey_state =
+	pxp->s1_chromakey_state =
 		(fb->flags & V4L2_FBUF_FLAG_CHROMAKEY) != 0;
 
 	pxp_set_olparam(pxp);
@@ -919,8 +963,8 @@ static int pxp_hw_init(struct pxps *pxp)
 	pxp->s0_fmt = &pxp_s0_formats[0];
 	pxp->drect.left = pxp->srect.left = 0;
 	pxp->drect.top = pxp->srect.top = 0;
-	pxp->drect.width = pxp->srect.width = var.xres;
-	pxp->drect.height = pxp->srect.height = var.yres;
+	pxp->drect.width = pxp->srect.width = pxp->s0_width = var.xres;
+	pxp->drect.height = pxp->srect.height = pxp->s0_height = var.yres;
 	pxp->s0_bgcolor = 0;
 
 	pxp->output = 0;
@@ -938,8 +982,9 @@ static int pxp_hw_init(struct pxps *pxp)
 	pxp->global_alpha_state = 0;
 	pxp->global_alpha = 0;
 	pxp->local_alpha_state = 0;
-	pxp->chromakey_state = 0;
-	pxp->chromakey = 0;
+	pxp->s1_chromakey_state = 0;
+	pxp->s1_chromakey = -1;
+	pxp->s0_chromakey = -1;
 
 	/* Write default h/w config */
 	pxp_set_ctrl(pxp);
@@ -947,7 +992,8 @@ static int pxp_hw_init(struct pxps *pxp)
 	pxp_set_s0crop(pxp);
 	pxp_set_oln(pxp);
 	pxp_set_olparam(pxp);
-	pxp_set_colorkey(pxp);
+	pxp_set_s0colorkey(pxp);
+	pxp_set_s1colorkey(pxp);
 	pxp_set_csc(pxp);
 
 	return 0;
@@ -1198,12 +1244,59 @@ static int __devexit pxp_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM
+static int pxp_suspend(struct platform_device *pdev, pm_message_t state)
+{
+	int i;
+
+	while (HW_PXP_CTRL_RD() & BM_PXP_CTRL_ENABLE)
+		;
+
+	for (i = 0; i < REGS1_NUMS; i++)
+		regs1[i] = __raw_readl(HW_PXP_CTRL_ADDR + REG_OFFSET * i);
+
+	for (i = 0; i < REGS2_NUMS; i++)
+		regs2[i] = __raw_readl(HW_PXP_PAGETABLE_ADDR + REG_OFFSET * i);
+
+	for (i = 0; i < REGS3_NUMS; i++)
+		regs3[i] = __raw_readl(HW_PXP_OL0_ADDR + REG_OFFSET * i);
+
+	HW_PXP_CTRL_SET(BM_PXP_CTRL_SFTRST);
+
+	return 0;
+}
+
+static int pxp_resume(struct platform_device *pdev)
+{
+	int i;
+
+	/* Pull PxP out of reset */
+	HW_PXP_CTRL_WR(0);
+
+	for (i = 0; i < REGS1_NUMS; i++)
+		__raw_writel(regs1[i], HW_PXP_CTRL_ADDR + REG_OFFSET * i);
+
+	for (i = 0; i < REGS2_NUMS; i++)
+		__raw_writel(regs2[i], HW_PXP_PAGETABLE_ADDR + REG_OFFSET * i);
+
+	for (i = 0; i < REGS3_NUMS; i++)
+		__raw_writel(regs3[i], HW_PXP_OL0_ADDR + REG_OFFSET * i);
+
+	return 0;
+}
+#else
+#define	pxp_suspend	NULL
+#define	pxp_resume	NULL
+#endif
+
 static struct platform_driver pxp_driver = {
 	.driver 	= {
 		.name	= PXP_DRIVER_NAME,
 	},
 	.probe		= pxp_probe,
 	.remove		= __exit_p(pxp_remove),
+	.suspend	= pxp_suspend,
+	.resume		= pxp_resume,
 };
 
 

@@ -18,16 +18,20 @@
 #include <linux/platform_device.h>
 #include <linux/clk.h>
 #include <linux/mxc_scc2_driver.h>
-
 #include <linux/spi/spi.h>
 
+#include <mach/gpio.h>
 #include <mach/hardware.h>
-#include <mach/spba.h>
 #include <mach/mxc_dptc.h>
+#include <mach/mxc_dvfs.h>
 #include <mach/sdma.h>
+#include <mach/spba.h>
+
 #include "sdma_script_code.h"
 #include "crm_regs.h"
-#include <mach/mxc_dvfs.h>
+
+/* Flag used to indicate if dvfs_core is active. */
+int dvfs_core_is_active;
 
 extern struct dptc_wp dptc_gp_wp_allfreq[DPTC_GP_WP_SUPPORTED];
 extern struct dptc_wp dptc_lp_wp_allfreq[DPTC_LP_WP_SUPPORTED];
@@ -773,28 +777,33 @@ static inline void mxc_init_dptc(void)
 }
 
 struct mxc_gpio_port mxc_gpio_ports[GPIO_PORT_NUM] = {
-	{
-	 .num = 0,
+	[0] = {
+	 .chip.label = "gpio-0",
 	 .base = IO_ADDRESS(GPIO1_BASE_ADDR),
-	 .irq_0_15 = MXC_INT_GPIO1_LOW,
-	 .irq_16_31 = MXC_INT_GPIO1_HIGH,
-	 .virtual_irq_start = MXC_GPIO_INT_BASE,
+	 .irq = MXC_INT_GPIO1_LOW,
+	 .irq_high = MXC_INT_GPIO1_HIGH,
+	 .virtual_irq_start = MXC_GPIO_INT_BASE
 	 },
-	{
-	 .num = 1,
+	[1] = {
+	 .chip.label = "gpio-1",
 	 .base = IO_ADDRESS(GPIO2_BASE_ADDR),
-	 .irq_0_15 = MXC_INT_GPIO2_LOW,
-	 .irq_16_31 = MXC_INT_GPIO2_HIGH,
-	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN * 1,
+	 .irq = MXC_INT_GPIO2_LOW,
+	 .irq_high = MXC_INT_GPIO2_HIGH,
+	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN
 	 },
-	{
-	 .num = 2,
+	[2] = {
+	 .chip.label = "gpio-2",
 	 .base = IO_ADDRESS(GPIO3_BASE_ADDR),
-	 .irq_0_15 = MXC_INT_GPIO3_LOW,
-	 .irq_16_31 = MXC_INT_GPIO3_HIGH,
-	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN * 2,
-	 },
+	 .irq = MXC_INT_GPIO3_LOW,
+	 .irq_high = MXC_INT_GPIO3_HIGH,
+	 .virtual_irq_start = MXC_GPIO_INT_BASE + GPIO_NUM_PIN * 2
+	 }
 };
+
+int __init mxc_register_gpios(void)
+{
+	return mxc_gpio_init(mxc_gpio_ports, ARRAY_SIZE(mxc_gpio_ports));
+}
 
 #if defined(CONFIG_MXC_VPU) || defined(CONFIG_MXC_VPU_MODULE)
 static struct resource vpu_resources[] = {
@@ -971,6 +980,26 @@ static inline void mxc_init_iim(void)
 {
 }
 #endif
+
+int __init mxc_init_srpgconfig(void)
+{
+	struct clk *gpcclk = clk_get(NULL, "gpc_dvfs_clk");
+	clk_enable(gpcclk);
+
+	/* Setup the number of clock cycles to wait for SRPG
+	* power up and power down requests.
+	*/
+	__raw_writel(0x03023030, MXC_SRPGC_ARM_PUPSCR);
+	__raw_writel(0x50, MXC_EMPGC0_ARM_PUPSCR);
+
+	__raw_writel(0x30033030, MXC_SRPGC_ARM_PDNSCR);
+	__raw_writel(0x50, MXC_EMPGC0_ARM_PDNSCR);
+
+	clk_disable(gpcclk);
+	clk_put(gpcclk);
+
+	return 0;
+}
 
 int __init mxc_init_devices(void)
 {

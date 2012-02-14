@@ -21,6 +21,7 @@
 #include <linux/delay.h>
 #include <linux/clk.h>
 #include <linux/io.h>
+#include <linux/kthread.h>
 
 #include <asm/dma.h>
 #include <asm/cacheflush.h>
@@ -35,13 +36,145 @@
 #include <mach/regs-clkctrl.h>
 #include <mach/regs-pinctrl.h>
 #include <mach/regs-power.h>
+#include <mach/regs-gpmi.h>
+#include <mach/regs-pwm.h>
+#include <mach/regs-usbctrl.h>
+#include <mach/regs-apbh.h>
+#include <mach/regs-apbx.h>
+#include <mach/regs-rtc.h>
+#include <mach/regs-dram.h>
+#include <mach/regs-emi.h>
+#include <mach/regs-digctl.h>
 
 #include "clock.h"
 #include "sleep.h"
 #include "common.h"
-
+#define PENDING_IRQ_RETRY 100
 static void *saved_sram;
 static int saved_sleep_state;
+
+#define WAIT_DC_OK_CYCLES 24000
+#define WAIT_CYCLE(n) for (i = 0; i < n; i++);
+#define LOWER_VDDIO 10
+#define LOWER_VDDA 9
+#define LOWER_VDDD 0xa
+#define MAX_POWEROFF_CODE_SIZE (6 * 1024)
+
+static void stmp378x_standby(void)
+{
+	int i;
+	u32 reg_vddd, reg_vdda, reg_vddio;
+
+	/* DDR EnterSelfrefreshMode */
+	HW_DRAM_CTL08_SET(BM_DRAM_CTL08_SREFRESH);
+
+	/* Gating EMI CLock */
+	HW_CLKCTRL_EMI_SET(BM_CLKCTRL_EMI_CLKGATE);
+
+	/* Disable PLL */
+	HW_CLKCTRL_PLLCTRL0_CLR(BM_CLKCTRL_PLLCTRL0_POWER);
+
+	/* Reduce the VDDIO (3.050 volt) */
+	reg_vddio = HW_POWER_VDDIOCTRL_RD();
+	HW_POWER_VDDIOCTRL_WR(HW_POWER_VDDIOCTRL_RD() |
+		BM_POWER_VDDIOCTRL_BO_OFFSET);
+	HW_POWER_VDDIOCTRL_WR(
+		(HW_POWER_VDDIOCTRL_RD() &
+		~BM_POWER_VDDIOCTRL_TRG)|LOWER_VDDIO);
+	WAIT_CYCLE(WAIT_DC_OK_CYCLES)
+
+	while (!(HW_POWER_STS_RD() & BM_POWER_STS_DC_OK))
+		;
+
+	/* Reduce VDDA 1.725volt */
+	reg_vdda = HW_POWER_VDDACTRL_RD();
+	HW_POWER_VDDACTRL_WR(HW_POWER_VDDACTRL_RD() |
+			BM_POWER_VDDACTRL_BO_OFFSET);
+	HW_POWER_VDDACTRL_WR((HW_POWER_VDDACTRL_RD() &
+			~BM_POWER_VDDACTRL_TRG) | LOWER_VDDA);
+	WAIT_CYCLE(WAIT_DC_OK_CYCLES)
+
+	/* wait for DC_OK */
+	while (!(HW_POWER_STS_RD() & BM_POWER_STS_DC_OK))
+		;
+
+	/* Reduce VDDD 1.000 volt */
+	reg_vddd = HW_POWER_VDDDCTRL_RD();
+	HW_POWER_VDDDCTRL_WR(HW_POWER_VDDDCTRL_RD() |
+			BM_POWER_VDDDCTRL_BO_OFFSET);
+	HW_POWER_VDDDCTRL_WR((HW_POWER_VDDDCTRL_RD() &
+		~BM_POWER_VDDDCTRL_TRG) | LOWER_VDDD);
+
+	WAIT_CYCLE(WAIT_DC_OK_CYCLES)
+
+	while (!(HW_POWER_STS_RD() & BM_POWER_STS_DC_OK))
+		;
+
+	/* optimize the DCDC loop gain */
+	HW_POWER_LOOPCTRL_WR((HW_POWER_LOOPCTRL_RD() &
+			~BM_POWER_LOOPCTRL_EN_RCSCALE));
+	HW_POWER_LOOPCTRL_WR((HW_POWER_LOOPCTRL_RD() &
+			~BM_POWER_LOOPCTRL_DC_R) |
+			(2<<BP_POWER_LOOPCTRL_DC_R));
+
+	/* half the fets */
+	HW_POWER_MINPWR_SET(BM_POWER_MINPWR_HALF_FETS);
+
+	HW_POWER_LOOPCTRL_CLR(BM_POWER_LOOPCTRL_CM_HYST_THRESH);
+	HW_POWER_LOOPCTRL_CLR(BM_POWER_LOOPCTRL_EN_CM_HYST);
+	HW_POWER_LOOPCTRL_CLR(BM_POWER_LOOPCTRL_EN_DF_HYST);
+	/* enable PFM */
+	HW_POWER_LOOPCTRL_SET(BM_POWER_LOOPCTRL_HYST_SIGN);
+	HW_POWER_MINPWR_SET(BM_POWER_MINPWR_EN_DC_PFM);
+
+	HW_CLKCTRL_CPU_SET(BM_CLKCTRL_CPU_INTERRUPT_WAIT);
+	/* Power off ... */
+	asm("mcr     p15, 0, r2, c7, c0, 4");
+	HW_CLKCTRL_CPU_CLR(BM_CLKCTRL_CPU_INTERRUPT_WAIT);
+
+	/* restore the DCDC parameter */
+
+	HW_POWER_MINPWR_CLR(BM_POWER_MINPWR_EN_DC_PFM);
+	HW_POWER_LOOPCTRL_CLR(BM_POWER_LOOPCTRL_HYST_SIGN);
+	HW_POWER_LOOPCTRL_SET(BM_POWER_LOOPCTRL_EN_DF_HYST);
+	HW_POWER_LOOPCTRL_SET(BM_POWER_LOOPCTRL_EN_CM_HYST);
+	HW_POWER_LOOPCTRL_SET(BM_POWER_LOOPCTRL_CM_HYST_THRESH);
+
+	HW_POWER_LOOPCTRL_WR((HW_POWER_LOOPCTRL_RD() &
+				~BM_POWER_LOOPCTRL_DC_R) |
+				(2<<BP_POWER_LOOPCTRL_DC_R));
+	HW_POWER_LOOPCTRL_WR((HW_POWER_LOOPCTRL_RD() &
+				~BM_POWER_LOOPCTRL_EN_RCSCALE) |
+				(3 << BP_POWER_LOOPCTRL_EN_RCSCALE));
+
+
+	/* Restore VDDD */
+	HW_POWER_VDDDCTRL_WR(reg_vddd);
+
+	WAIT_CYCLE(WAIT_DC_OK_CYCLES)
+	while (!(HW_POWER_STS_RD() & BM_POWER_STS_DC_OK))
+		;
+
+	HW_POWER_VDDACTRL_WR(reg_vdda);
+	WAIT_CYCLE(WAIT_DC_OK_CYCLES)
+	while (!(HW_POWER_STS_RD() & BM_POWER_STS_DC_OK))
+		;
+
+	HW_POWER_VDDIOCTRL_WR(reg_vddio);
+	WAIT_CYCLE(WAIT_DC_OK_CYCLES)
+	while (!(HW_POWER_STS_RD() & BM_POWER_STS_DC_OK))
+		;
+
+
+	/* Enable PLL */
+	HW_CLKCTRL_PLLCTRL0_SET(BM_CLKCTRL_PLLCTRL0_POWER);
+	/* Ungating EMI CLock */
+	HW_CLKCTRL_EMI_CLR(BM_CLKCTRL_EMI_CLKGATE);
+
+	/* LeaveSelfrefreshMode */
+	HW_DRAM_CTL08_CLR(BM_DRAM_CTL08_SREFRESH);
+	WAIT_CYCLE(WAIT_DC_OK_CYCLES)
+}
 
 static inline void do_standby(void)
 {
@@ -53,6 +186,8 @@ static inline void do_standby(void)
 	struct clk *cpu_parent = NULL;
 	int cpu_rate = 0;
 	int hbus_rate = 0;
+	int i, pending_irq;
+	u32 reg_clkctrl_clkseq, reg_clkctrl_xtal;
 
 	/*
 	 * 1) switch clock domains from PLL to 24MHz
@@ -70,8 +205,8 @@ static inline void do_standby(void)
 	flush_cache_all();
 
 	/* copy suspend function into SRAM */
-	memcpy((void *)STMP3XXX_OCRAM_VA_BASE, stmp37xx_cpu_standby,
-			stmp_standby_alloc_sz);
+	memcpy((void *)STMP3XXX_OCRAM_VA_BASE, (void*)stmp378x_standby,
+			MAX_POWEROFF_CODE_SIZE);
 
 	/* now switch the CPU to ref_xtal */
 	cpu_clk = clk_get(NULL, "cpu");
@@ -94,19 +229,47 @@ static inline void do_standby(void)
 
 	HW_POWER_CTRL_SET(BM_POWER_CTRL_ENIRQ_PSWITCH);
 	HW_ICOLL_INTERRUPTn_SET(IRQ_VDD5V, BM_ICOLL_INTERRUPTn_ENABLE);
+
 	/* clear pending interrupt, if any */
+	for (i = 0; i < PENDING_IRQ_RETRY; i++) {
+		pending_irq = HW_ICOLL_STAT_RD() & 0x7f;
+		if (pending_irq == 0x7f)
+			break;
+		pr_info("irqn = %u\n", pending_irq);
+		/* Tell ICOLL to release IRQ line */
+		HW_ICOLL_VECTOR_WR(0x0);
+		/* ACK current interrupt */
+		HW_ICOLL_LEVELACK_WR(BV_ICOLL_LEVELACK_IRQLEVELACK__LEVEL0);
+		/* Barrier */
+		(void) HW_ICOLL_STAT_RD();
+	}
+
+	reg_clkctrl_clkseq = HW_CLKCTRL_CLKSEQ_RD();
+
+	HW_CLKCTRL_CLKSEQ_SET(BM_CLKCTRL_CLKSEQ_BYPASS_ETM |
+	BM_CLKCTRL_CLKSEQ_BYPASS_SSP |
+	BM_CLKCTRL_CLKSEQ_BYPASS_GPMI |
+	BM_CLKCTRL_CLKSEQ_BYPASS_IR |
+	BM_CLKCTRL_CLKSEQ_BYPASS_PIX|
+	BM_CLKCTRL_CLKSEQ_BYPASS_SAIF);
+
+	reg_clkctrl_xtal = HW_CLKCTRL_XTAL_RD();
+
+	HW_CLKCTRL_XTAL_SET(BM_CLKCTRL_XTAL_FILT_CLK24M_GATE |
+	BM_CLKCTRL_XTAL_PWM_CLK24M_GATE  |
+	BM_CLKCTRL_XTAL_DRI_CLK24M_GATE);
 
 	/* do suspend */
 	stmp37xx_cpu_standby_ptr = (void *)STMP3XXX_OCRAM_VA_BASE;
+
 	stmp37xx_cpu_standby_ptr();
+
+	HW_CLKCTRL_CLKSEQ_WR(reg_clkctrl_clkseq);
+	HW_CLKCTRL_XTAL_WR(reg_clkctrl_xtal);
 
 	pr_info("wakeup irq source = %d\n", HW_ICOLL_STAT_RD());
 	saved_sleep_state = 0;  /* waking from standby */
-	HW_POWER_CTRL_CLR(BM_POWER_CTRL_ENIRQ_PSWITCH |
-			  BM_POWER_CTRL_PSWITCH_IRQ);
-#ifndef CONFIG_BATTERY_STMP3XXX
-	HW_ICOLL_INTERRUPTn_CLR(IRQ_VDD5V, BM_ICOLL_INTERRUPTn_ENABLE);
-#endif
+	HW_POWER_CTRL_CLR(BM_POWER_CTRL_PSWITCH_IRQ);
 	stmp3xxx_resume_timer();
 	stmp3xxx_dma_resume();
 
@@ -341,6 +504,75 @@ static void stmp37xx_pm_power_off(void)
 	HW_POWER_RESET_WR((0x3e77 << 16) | 1);
 }
 
+struct stmp37xx_pswitch_state {
+	int dev_running;
+};
+
+static DECLARE_COMPLETION(suspend_request);
+
+static int suspend_thread_fn(void *data)
+{
+	while (1) {
+		wait_for_completion(&suspend_request);
+		pm_suspend(PM_SUSPEND_STANDBY);
+	}
+	return 0;
+}
+
+static struct stmp37xx_pswitch_state pswitch_state = {
+	.dev_running = 0,
+};
+
+static irqreturn_t pswitch_interrupt(int irq, void *dev)
+{
+	int pin_value, i;
+
+	/* check if irq by pswitch */
+	if (!(HW_POWER_CTRL_RD() & BM_POWER_CTRL_PSWITCH_IRQ))
+		return IRQ_HANDLED;
+	for (i = 0; i < 3000; i++) {
+		pin_value = HW_POWER_STS_RD() &
+			BF_POWER_STS_PSWITCH(0x1);
+		if (pin_value == 0)
+			break;
+		mdelay(1);
+	}
+	if (i < 3000) {
+		pr_info("pswitch goto suspend\n");
+		complete(&suspend_request);
+	} else {
+		pr_info("release pswitch to power down\n");
+		for (i = 0; i < 5000; i++) {
+			pin_value = HW_POWER_STS_RD() &
+				BF_POWER_STS_PSWITCH(0x1);
+			if (pin_value == 0)
+				break;
+			mdelay(1);
+		}
+		pr_info("pswitch power down\n");
+		stmp37xx_pm_power_off();
+	}
+	HW_POWER_CTRL_CLR(BM_POWER_CTRL_PSWITCH_IRQ);
+	return IRQ_HANDLED;
+}
+
+static struct irqaction pswitch_irq = {
+	.name		= "pswitch",
+	.flags		= IRQF_DISABLED | IRQF_SHARED,
+	.handler	= pswitch_interrupt,
+	.dev_id		= &pswitch_state,
+};
+
+static void init_pswitch(void)
+{
+	kthread_run(suspend_thread_fn, NULL, "pswitch");
+	HW_POWER_CTRL_CLR(BM_POWER_CTRL_PSWITCH_IRQ);
+	HW_POWER_CTRL_SET(BM_POWER_CTRL_POLARITY_PSWITCH |
+		BM_POWER_CTRL_ENIRQ_PSWITCH);
+	HW_POWER_CTRL_CLR(BM_POWER_CTRL_PSWITCH_IRQ);
+	setup_irq(IRQ_VDD5V, &pswitch_irq);
+}
+
 static int __init stmp37xx_pm_init(void)
 {
 	saved_sram = kmalloc(0x4000, GFP_ATOMIC);
@@ -353,6 +585,7 @@ static int __init stmp37xx_pm_init(void)
 //	pm_power_off = stmp37xx_pm_power_off;
 	pm_idle = stmp37xx_pm_idle;
 	suspend_set_ops(&stmp37xx_suspend_ops);
+	init_pswitch();
 	return 0;
 }
 

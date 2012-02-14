@@ -53,7 +53,7 @@ void _ipu_dp_uninit(ipu_channel_t channel);
 void _ipu_dc_init(int dc_chan, int di, bool interlaced);
 void _ipu_dc_uninit(int dc_chan);
 void _ipu_dp_dc_enable(ipu_channel_t channel);
-void _ipu_dp_dc_disable(ipu_channel_t channel);
+void _ipu_dp_dc_disable(ipu_channel_t channel, bool swap);
 void _ipu_dmfc_init(void);
 void _ipu_dmfc_set_wait4eot(int dma_chan, int width);
 int _ipu_chan_is_interlaced(ipu_channel_t channel);
@@ -78,7 +78,7 @@ void _ipu_ic_init_rotate_pp(ipu_channel_params_t *params);
 void _ipu_ic_uninit_rotate_pp(void);
 int _ipu_ic_idma_init(int dma_chan, uint16_t width, uint16_t height,
 		      int burst_size, ipu_rotate_mode_t rot);
-void _ipu_vdi_toggle_top_field_man();
+void _ipu_vdi_toggle_top_field_man(void);
 int _ipu_csi_init(ipu_channel_t channel, uint32_t csi);
 void ipu_csi_set_test_generator(bool active, uint32_t r_value,
 		uint32_t g_value, uint32_t b_value,

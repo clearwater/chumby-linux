@@ -36,7 +36,6 @@
 
 extern struct resource *otg_get_resources(void);
 
-static int regs_remapped /* = 0 */;
 #undef EHCI_PROC_PTC
 #ifdef EHCI_PROC_PTC		/* /proc PORTSC:PTC support */
 /*
@@ -167,14 +166,6 @@ static int usb_hcd_fsl_probe(const struct hc_driver *driver,
 	} else
 #endif
 	{
-		if ((pdev->dev.parent) &&
-			(to_platform_device(pdev->dev.parent)->resource)) {
-			pdev->resource =
-				to_platform_device(pdev->dev.parent)->resource;
-			pdev->num_resources =
-			to_platform_device(pdev->dev.parent)->num_resources;
-		}
-
 		res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
 		if (!res) {
 			dev_err(&pdev->dev,
@@ -196,18 +187,13 @@ static int usb_hcd_fsl_probe(const struct hc_driver *driver,
 		}
 	}
 
-	if (!(pdata->port_enables & FSL_USB2_DONT_REMAP)) {
-		hcd->regs = ioremap(hcd->rsrc_start, hcd->rsrc_len);
+	hcd->regs = ioremap(hcd->rsrc_start, hcd->rsrc_len);
 
-		if (hcd->regs == NULL) {
-			dev_dbg(&pdev->dev, "error mapping memory\n");
-			retval = -EFAULT;
-			goto err3;
-		}
-		regs_remapped = 1;
-	} else
-		hcd->regs = (void __iomem *)(u32)(hcd->rsrc_start);
-
+	if (hcd->regs == NULL) {
+		dev_dbg(&pdev->dev, "error mapping memory\n");
+		retval = -EFAULT;
+		goto err3;
+	}
 	pdata->regs = hcd->regs;
 
 	/*
@@ -263,8 +249,7 @@ static int usb_hcd_fsl_probe(const struct hc_driver *driver,
 	return retval;
 
 err4:
-	if (regs_remapped)
-		iounmap(hcd->regs);
+	iounmap(hcd->regs);
 err3:
 	if (pdata->operating_mode != FSL_USB2_DR_OTG)
 		release_mem_region(hcd->rsrc_start, hcd->rsrc_len);
@@ -314,8 +299,7 @@ static void usb_hcd_fsl_remove(struct usb_hcd *hcd,
 	if (pdata->platform_uninit)
 		pdata->platform_uninit(pdata);
 
-	if (regs_remapped)
-		iounmap(hcd->regs);
+	iounmap(hcd->regs);
 }
 
 static void fsl_setup_phy(struct ehci_hcd *ehci,
@@ -642,6 +626,9 @@ static int ehci_fsl_drv_suspend(struct platform_device *pdev,
 	ehci_writel(ehci, tmp, &ehci->regs->port_status[0]);
 	}
 
+	if (pdata->platform_suspend)
+		pdata->platform_suspend(pdata);
+
 	return 0;
 }
 
@@ -685,6 +672,9 @@ static int ehci_fsl_drv_resume(struct platform_device *pdev)
 
 	/* set host mode */
 	fsl_platform_set_host_mode(hcd);
+
+	if (pdata->platform_resume)
+		pdata->platform_resume(pdata);
 
 	/* restore EHCI registers */
 	ehci_writel(ehci, pdata->pm_command, &ehci->regs->command);

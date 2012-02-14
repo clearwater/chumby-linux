@@ -1,5 +1,5 @@
 /*
- * Copyright 2008 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright 2009 Freescale Semiconductor, Inc. All Rights Reserved.
  */
 
 /*
@@ -178,6 +178,8 @@
 #define FEC_BASE_ADDR		(AIPS1_BASE_ADDR + 0x000E8000)
 #define RNGC_BASE_ADDR		(AIPS1_BASE_ADDR + 0x000EC000)
 #define TVE_BASE_ADDR		(AIPS1_BASE_ADDR + 0x000F0000)
+#define ECT_CTIO_BASE_ADDR	(AIPS1_BASE_ADDR + 0x00018000)
+#define CLKCTL_BASE_ADDR	(AIPS1_BASE_ADDR + 0x0000C000)
 
 /*
  * SPBA global module enabled #0
@@ -485,9 +487,23 @@
 /*!
  * Interrupt Number for ARM11 PMU
  */
-#define ARM11_PMU_IRQ		MXC_INT_EVTMON
+#define ARM11_PMU_IRQ		MXC_INT_PER_MEASURE
 
 #define	MXC_GPIO_INT_BASE	(MXC_MAX_INT_LINES)
+
+/* gpio and gpio based interrupt handling */
+#define GPIO_DR                 0x00
+#define GPIO_GDIR               0x04
+#define GPIO_PSR                0x08
+#define GPIO_ICR1               0x0C
+#define GPIO_ICR2               0x10
+#define GPIO_IMR                0x14
+#define GPIO_ISR                0x18
+#define GPIO_INT_LOW_LEV        0x0
+#define GPIO_INT_HIGH_LEV       0x1
+#define GPIO_INT_RISE_EDGE      0x2
+#define GPIO_INT_FALL_EDGE      0x3
+#define GPIO_INT_NONE           0x4
 
 /*!
  * Number of GPIO port as defined in the IC Spec

@@ -239,6 +239,7 @@ static irqreturn_t mxc_rtc_interrupt(int irq, void *dev_id)
 	u32 lp_status, lp_cr;
 	u32 events = 0;
 
+	clk_enable(pdata->clk);
 	lp_status = __raw_readl(ioaddr + SRTC_LPSR);
 	lp_cr = __raw_readl(ioaddr + SRTC_LPCR);
 
@@ -262,6 +263,7 @@ static irqreturn_t mxc_rtc_interrupt(int irq, void *dev_id)
 
 	/* clear interrupt status */
 	__raw_writel(lp_status, ioaddr + SRTC_LPSR);
+	clk_disable(pdata->clk);
 
 	rtc_update_irq(pdata->rtc, 1, events);
 	return IRQ_HANDLED;
@@ -288,19 +290,6 @@ static int mxc_rtc_open(struct device *dev)
 static void mxc_rtc_release(struct device *dev)
 {
 	struct rtc_drv_data *pdata = dev_get_drvdata(dev);
-	void __iomem *ioaddr = pdata->ioaddr;
-	unsigned long lock_flags = 0;
-
-	spin_lock_irqsave(&rtc_lock, lock_flags);
-
-	/* Disable all rtc interrupts */
-	__raw_writel(__raw_readl(ioaddr + SRTC_LPCR) & ~(SRTC_LPCR_ALL_INT_EN),
-		     ioaddr + SRTC_LPCR);
-
-	/* Clear all interrupt status */
-	__raw_writel(0xFFFFFFFF, ioaddr + SRTC_LPSR);
-
-	spin_unlock_irqrestore(&rtc_lock, lock_flags);
 
 	clk_disable(pdata->clk);
 
@@ -506,9 +495,6 @@ static struct rtc_class_ops mxc_rtc_ops = {
 };
 
 /*! MXC RTC Power management control */
-
-static struct timespec mxc_rtc_delta;
-
 static int mxc_rtc_probe(struct platform_device *pdev)
 {
 	struct clk *clk;
@@ -656,26 +642,13 @@ static int __exit mxc_rtc_remove(struct platform_device *pdev)
 static int mxc_rtc_suspend(struct platform_device *pdev, pm_message_t state)
 {
 	struct rtc_drv_data *pdata = platform_get_drvdata(pdev);
-	void __iomem *ioaddr = pdata->ioaddr;
-	struct timespec tv;
 
-	clk_enable(pdata->clk);
 	if (device_may_wakeup(&pdev->dev)) {
 		enable_irq_wake(pdata->irq);
 	} else {
-		/* calculate time delta for suspend.  RTC precision is
-		   1 second; adjust delta for avg 1/2 sec err */
-		tv.tv_nsec = NSEC_PER_SEC >> 1;
-		tv.tv_sec = __raw_readl(ioaddr + SRTC_LPSCMR);
-		set_normalized_timespec(&mxc_rtc_delta,
-					xtime.tv_sec - tv.tv_sec,
-					xtime.tv_nsec - tv.tv_nsec);
-
 		if (pdata->irq_enable)
 			disable_irq(pdata->irq);
 	}
-
-	clk_disable(pdata->clk);
 
 	return 0;
 }
@@ -692,33 +665,14 @@ static int mxc_rtc_suspend(struct platform_device *pdev, pm_message_t state)
 static int mxc_rtc_resume(struct platform_device *pdev)
 {
 	struct rtc_drv_data *pdata = platform_get_drvdata(pdev);
-	void __iomem *ioaddr = pdata->ioaddr;
-	struct timespec tv;
-	struct timespec ts;
-
-	clk_enable(pdata->clk);
 
 	if (device_may_wakeup(&pdev->dev)) {
 		disable_irq_wake(pdata->irq);
 	} else {
 		if (pdata->irq_enable)
 			enable_irq(pdata->irq);
-
-		tv.tv_nsec = 0;
-		tv.tv_sec = __raw_readl(ioaddr + SRTC_LPSCMR);
-
-		/*
-		 * restore wall clock using delta against this RTC;
-		 * adjust again for avg 1/2 second RTC sampling error
-		 */
-		set_normalized_timespec(&ts,
-					tv.tv_sec + mxc_rtc_delta.tv_sec,
-					(NSEC_PER_SEC >> 1) +
-					mxc_rtc_delta.tv_nsec);
-		do_settimeofday(&ts);
 	}
 
-	clk_disable(pdata->clk);
 	return 0;
 }
 

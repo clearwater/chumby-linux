@@ -42,11 +42,12 @@ static int video_nr = -1;
 static cam_data *g_cam;
 
 /*! This data is used for the output to the display. */
-#define MXC_V4L2_CAPTURE_NUM_OUTPUTS        2
+#define MXC_V4L2_CAPTURE_NUM_OUTPUTS	3
+#define MXC_V4L2_CAPTURE_NUM_INPUTS	2
 static struct v4l2_output mxc_capture_outputs[MXC_V4L2_CAPTURE_NUM_OUTPUTS] = {
 	{
 	 .index = 0,
-	 .name = "DISP3",
+	 .name = "DISP3 BG",
 	 .type = V4L2_OUTPUT_TYPE_ANALOG,
 	 .audioset = 0,
 	 .modulator = 0,
@@ -59,7 +60,36 @@ static struct v4l2_output mxc_capture_outputs[MXC_V4L2_CAPTURE_NUM_OUTPUTS] = {
 	 .audioset = 0,
 	 .modulator = 0,
 	 .std = V4L2_STD_UNKNOWN,
-	 }
+	 },
+	{
+	 .index = 2,
+	 .name = "DISP3 FG",
+	 .type = V4L2_OUTPUT_TYPE_ANALOG,
+	 .audioset = 0,
+	 .modulator = 0,
+	 .std = V4L2_STD_UNKNOWN,
+	 },
+};
+
+static struct v4l2_input mxc_capture_inputs[MXC_V4L2_CAPTURE_NUM_INPUTS] = {
+	{
+	 .index = 0,
+	 .name = "CSI IC MEM",
+	 .type = V4L2_INPUT_TYPE_CAMERA,
+	 .audioset = 0,
+	 .tuner = 0,
+	 .std = V4L2_STD_UNKNOWN,
+	 .status = 0,
+	 },
+	{
+	 .index = 1,
+	 .name = "CSI MEM",
+	 .type = V4L2_INPUT_TYPE_CAMERA,
+	 .audioset = 0,
+	 .tuner = 0,
+	 .std = V4L2_STD_UNKNOWN,
+	 .status = V4L2_IN_ST_NO_POWER,
+	 },
 };
 
 /*! List of TV input video formats supported. The video formats is corresponding
@@ -366,6 +396,7 @@ static int mxc_streamoff(cam_data *cam)
 		err = cam->enc_disable(cam);
 	}
 	mxc_free_frames(cam);
+	mxc_capture_inputs[cam->current_input].status |= V4L2_IN_ST_NO_POWER;
 	cam->capture_on = false;
 	return err;
 }
@@ -380,8 +411,10 @@ static int mxc_streamoff(cam_data *cam)
  */
 static int verify_preview(cam_data *cam, struct v4l2_window *win)
 {
-	int i = 0;
+	int i = 0, width_bound = 0, height_bound = 0;
 	int *width, *height;
+	struct fb_info *bg_fbi = NULL;
+	bool foregound_fb;
 
 	pr_debug("In MVC: verify_preview\n");
 
@@ -391,23 +424,41 @@ static int verify_preview(cam_data *cam, struct v4l2_window *win)
 			pr_err("ERROR: verify_preview frame buffer NULL.\n");
 			return -1;
 		}
-		if (strncmp(cam->overlay_fb->fix.id,
-			    mxc_capture_outputs[cam->output].name, 5) == 0) {
+		if (strcmp(cam->overlay_fb->fix.id, "DISP3 BG") == 0)
+			bg_fbi = cam->overlay_fb;
+		if (strcmp(cam->overlay_fb->fix.id,
+			    mxc_capture_outputs[cam->output].name) == 0) {
+			if (strcmp(cam->overlay_fb->fix.id, "DISP3 FG") == 0)
+				foregound_fb = true;
 			break;
 		}
 	} while (++i < FB_MAX);
 
-	/* 4 bytes alignment for both FG and BG */
-	if (cam->overlay_fb->var.bits_per_pixel == 24) {
-		win->w.left -= win->w.left % 4;
-	} else if (cam->overlay_fb->var.bits_per_pixel == 16) {
-		win->w.left -= win->w.left % 2;
-	}
+	if (foregound_fb) {
+		width_bound = bg_fbi->var.xres;
+		height_bound = bg_fbi->var.yres;
 
-	if (win->w.width + win->w.left > cam->overlay_fb->var.xres)
-		win->w.width = cam->overlay_fb->var.xres - win->w.left;
-	if (win->w.height + win->w.top > cam->overlay_fb->var.yres)
-		win->w.height = cam->overlay_fb->var.yres - win->w.top;
+		if (win->w.width + win->w.left > bg_fbi->var.xres ||
+		    win->w.height + win->w.top > bg_fbi->var.yres) {
+			pr_err("ERROR: FG window position exceeds.\n");
+			return -1;
+		}
+	} else {
+		/* 4 bytes alignment for BG */
+		width_bound = cam->overlay_fb->var.xres;
+		height_bound = cam->overlay_fb->var.yres;
+
+		if (cam->overlay_fb->var.bits_per_pixel == 24) {
+			win->w.left -= win->w.left % 4;
+		} else if (cam->overlay_fb->var.bits_per_pixel == 16) {
+			win->w.left -= win->w.left % 2;
+		}
+
+		if (win->w.width + win->w.left > cam->overlay_fb->var.xres)
+			win->w.width = cam->overlay_fb->var.xres - win->w.left;
+		if (win->w.height + win->w.top > cam->overlay_fb->var.yres)
+			win->w.height = cam->overlay_fb->var.yres - win->w.top;
+	}
 
 	/* stride line limitation */
 	win->w.height -= win->w.height % 8;
@@ -427,7 +478,7 @@ static int verify_preview(cam_data *cam, struct v4l2_window *win)
 		*width = cam->crop_bounds.width / 8;
 		if (*width % 8)
 			*width += 8 - *width % 8;
-		if (*width + win->w.left > cam->overlay_fb->var.xres) {
+		if (*width + win->w.left > width_bound) {
 			pr_err("ERROR: v4l2 capture: width exceeds "
 				"resize limit.\n");
 			return -1;
@@ -443,7 +494,7 @@ static int verify_preview(cam_data *cam, struct v4l2_window *win)
 		*height = cam->crop_bounds.height / 8;
 		if (*height % 8)
 			*height += 8 - *height % 8;
-		if (*height + win->w.top > cam->overlay_fb->var.yres) {
+		if (*height + win->w.top > height_bound) {
 			pr_err("ERROR: v4l2 capture: height exceeds "
 				"resize limit.\n");
 			return -1;
@@ -471,7 +522,7 @@ static int start_preview(cam_data *cam)
 
 #if defined(CONFIG_MXC_IPU_PRP_VF_SDC) || defined(CONFIG_MXC_IPU_PRP_VF_SDC_MODULE)
 	pr_debug("   This is an SDC display\n");
-	if (cam->output == 0) {
+	if (cam->output == 0 || cam->output == 2) {
 		if (cam->v4l2_fb.flags == V4L2_FBUF_FLAG_OVERLAY)
 			err = prp_vf_sdc_select(cam);
 		else if (cam->v4l2_fb.flags == V4L2_FBUF_FLAG_PRIMARY)
@@ -530,7 +581,7 @@ static int stop_preview(cam_data *cam)
 #endif
 
 #if defined(CONFIG_MXC_IPU_PRP_VF_SDC) || defined(CONFIG_MXC_IPU_PRP_VF_SDC_MODULE)
-	if (cam->output == 0) {
+	if (cam->output == 0 || cam->output == 2) {
 		if (cam->v4l2_fb.flags == V4L2_FBUF_FLAG_OVERLAY)
 			err = prp_vf_sdc_deselect(cam);
 		else if (cam->v4l2_fb.flags == V4L2_FBUF_FLAG_PRIMARY)
@@ -617,14 +668,14 @@ static int mxc_v4l2_s_fmt(cam_data *cam, struct v4l2_format *f)
 			return -EINVAL;
 		}
 
-		/* Handle case where size requested is larger than cuurent
-		 * camera setting. */
-		if ((f->fmt.pix.width > cam->crop_bounds.width)
-			|| (f->fmt.pix.height > cam->crop_bounds.height)) {
-			/* Need the logic here, calling vidioc_s_param if
-			 * camera can change. */
-			/* For the moment, just return an error. */
-			return -EINVAL;
+		/*
+		 * Force the capture window resolution to be crop bounds
+		 * for CSI MEM input mode.
+		 */
+		if (strcmp(mxc_capture_inputs[cam->current_input].name,
+			   "CSI MEM") == 0) {
+			f->fmt.pix.width = cam->crop_current.width;
+			f->fmt.pix.height = cam->crop_current.height;
 		}
 
 		if (cam->rotation >= IPU_ROTATE_90_RIGHT) {
@@ -639,10 +690,10 @@ static int mxc_v4l2_s_fmt(cam_data *cam, struct v4l2_format *f)
 		*width -= *width % 8;
 		*height -= *height % 8;
 
-		if ((cam->crop_bounds.width / *width > 8) ||
-		    ((cam->crop_bounds.width / *width == 8) &&
-		     (cam->crop_bounds.width % *width))) {
-			*width = cam->crop_bounds.width / 8;
+		if ((cam->crop_current.width / *width > 8) ||
+		    ((cam->crop_current.width / *width == 8) &&
+		     (cam->crop_current.width % *width))) {
+			*width = cam->crop_current.width / 8;
 			if (*width % 8)
 				*width += 8 - *width % 8;
 			pr_err("ERROR: v4l2 capture: width exceeds limit "
@@ -650,10 +701,10 @@ static int mxc_v4l2_s_fmt(cam_data *cam, struct v4l2_format *f)
 			       *width);
 		}
 
-		if ((cam->crop_bounds.height / *height > 8) ||
-		    ((cam->crop_bounds.height / *height == 8) &&
-		     (cam->crop_bounds.height % *height))) {
-			*height = cam->crop_bounds.height / 8;
+		if ((cam->crop_current.height / *height > 8) ||
+		    ((cam->crop_current.height / *height == 8) &&
+		     (cam->crop_current.height % *height))) {
+			*height = cam->crop_current.height / 8;
 			if (*height % 8)
 				*height += 8 - *height % 8;
 			pr_err("ERROR: v4l2 capture: height exceeds limit "
@@ -1082,6 +1133,13 @@ static int mxc_v4l2_s_param(cam_data *cam, struct v4l2_streamparm *parm)
 	cam->crop_bounds.width = cam_fmt.fmt.pix.width;
 	cam->crop_bounds.height = cam_fmt.fmt.pix.height;
 
+	/*
+	 * Set the default current cropped resolution to be the same with
+	 * the cropping boundary.
+	 */
+	cam->crop_current.width = cam->crop_bounds.width;
+	cam->crop_current.height = cam->crop_bounds.height;
+
 	/* This essentially loses the data at the left and bottom of the image
 	 * giving a digital zoom image, if crop_current is less than the full
 	 * size of the image. */
@@ -1281,9 +1339,17 @@ static int mxc_v4l_open(struct inode *inode, struct file *file)
 		wait_event_interruptible(cam->power_queue,
 					 cam->low_power == false);
 
-#if defined(CONFIG_MXC_IPU_PRP_ENC) || defined(CONFIG_MXC_IPU_PRP_ENC_MODULE)
-		err = prp_enc_select(cam);
+		if (strcmp(mxc_capture_inputs[cam->current_input].name,
+			   "CSI MEM") == 0) {
+#if defined(CONFIG_MXC_IPU_CSI_ENC) || defined(CONFIG_MXC_IPU_CSI_ENC_MODULE)
+			err = csi_enc_select(cam);
 #endif
+		} else if (strcmp(mxc_capture_inputs[cam->current_input].name,
+				  "CSI IC MEM") == 0) {
+#if defined(CONFIG_MXC_IPU_PRP_ENC) || defined(CONFIG_MXC_IPU_PRP_ENC_MODULE)
+			err = prp_enc_select(cam);
+#endif
+		}
 
 		cam->enc_counter = 0;
 		cam->skip_frame = 0;
@@ -1422,9 +1488,18 @@ static int mxc_v4l_close(struct inode *inode, struct file *file)
 					 cam->low_power == false);
 		pr_info("mxc_v4l_close: release resource\n");
 
-#if defined(CONFIG_MXC_IPU_PRP_ENC) || defined(CONFIG_MXC_IPU_PRP_ENC_MODULE)
-		err |= prp_enc_deselect(cam);
+		if (strcmp(mxc_capture_inputs[cam->current_input].name,
+			   "CSI MEM") == 0) {
+#if defined(CONFIG_MXC_IPU_CSI_ENC) || defined(CONFIG_MXC_IPU_CSI_ENC_MODULE)
+			err |= csi_enc_deselect(cam);
 #endif
+		} else if (strcmp(mxc_capture_inputs[cam->current_input].name,
+				  "CSI IC MEM") == 0) {
+#if defined(CONFIG_MXC_IPU_PRP_ENC) || defined(CONFIG_MXC_IPU_PRP_ENC_MODULE)
+			err |= prp_enc_deselect(cam);
+#endif
+		}
+
 		mxc_free_frame_buf(cam);
 		file->private_data = NULL;
 
@@ -1437,7 +1512,9 @@ static int mxc_v4l_close(struct inode *inode, struct file *file)
 	return err;
 }
 
-#if defined(CONFIG_MXC_IPU_PRP_ENC) || defined(CONFIG_MXC_IPU_PRP_ENC_MODULE)
+#if defined(CONFIG_MXC_IPU_PRP_ENC) || defined(CONFIG_MXC_IPU_CSI_ENC) || \
+    defined(CONFIG_MXC_IPU_PRP_ENC_MODULE) || \
+    defined(CONFIG_MXC_IPU_CSI_ENC_MODULE)
 /*
  * V4L interface - read function
  *
@@ -1672,6 +1749,7 @@ static int mxc_v4l_do_ioctl(struct inode *inode, struct file *file,
 			   flags & V4L2_BUF_FLAG_QUEUED) {
 			pr_err("ERROR: v4l2 capture: VIDIOC_QBUF: "
 			       "buffer already queued\n");
+			retval = -EINVAL;
 		} else if (cam->frame[index].buffer.
 			   flags & V4L2_BUF_FLAG_DONE) {
 			pr_err("ERROR: v4l2 capture: VIDIOC_QBUF: "
@@ -1680,6 +1758,7 @@ static int mxc_v4l_do_ioctl(struct inode *inode, struct file *file,
 			    ~V4L2_BUF_FLAG_DONE;
 			cam->frame[index].buffer.flags |=
 			    V4L2_BUF_FLAG_QUEUED;
+			retval = -EINVAL;
 		}
 
 		buf->flags = cam->frame[index].buffer.flags;
@@ -1693,6 +1772,12 @@ static int mxc_v4l_do_ioctl(struct inode *inode, struct file *file,
 	case VIDIOC_DQBUF: {
 		struct v4l2_buffer *buf = arg;
 		pr_debug("   case VIDIOC_DQBUF\n");
+
+		if ((cam->enc_counter == 0) &&
+			(file->f_flags & O_NONBLOCK)) {
+			retval = -EAGAIN;
+			break;
+		}
 
 		retval = mxc_v4l_dqueue(cam, buf);
 
@@ -1918,12 +2003,67 @@ static int mxc_v4l_do_ioctl(struct inode *inode, struct file *file,
 		break;
 	}
 
+	case VIDIOC_ENUMINPUT: {
+		struct v4l2_input *input = arg;
+		pr_debug("   case VIDIOC_ENUMINPUT\n");
+		if (input->index >= MXC_V4L2_CAPTURE_NUM_INPUTS) {
+			retval = -EINVAL;
+			break;
+		}
+		*input = mxc_capture_inputs[input->index];
+		break;
+	}
+
+	case VIDIOC_G_INPUT: {
+		int *index = arg;
+		pr_debug("   case VIDIOC_G_INPUT\n");
+		*index = cam->current_input;
+		break;
+	}
+
+	case VIDIOC_S_INPUT: {
+		int *index = arg;
+		pr_debug("   case VIDIOC_S_INPUT\n");
+		if (*index >= MXC_V4L2_CAPTURE_NUM_INPUTS) {
+			retval = -EINVAL;
+			break;
+		}
+
+		if (*index == cam->current_input)
+			break;
+
+		if ((mxc_capture_inputs[cam->current_input].status &
+		    V4L2_IN_ST_NO_POWER) == 0) {
+			retval = mxc_streamoff(cam);
+			if (retval)
+				break;
+			mxc_capture_inputs[cam->current_input].status |=
+							V4L2_IN_ST_NO_POWER;
+		}
+
+		if (strcmp(mxc_capture_inputs[*index].name, "CSI MEM") == 0) {
+#if defined(CONFIG_MXC_IPU_CSI_ENC) || defined(CONFIG_MXC_IPU_CSI_ENC_MODULE)
+			retval = csi_enc_select(cam);
+			if (retval)
+				break;
+#endif
+		} else if (strcmp(mxc_capture_inputs[*index].name,
+				  "CSI IC MEM") == 0) {
+#if defined(CONFIG_MXC_IPU_PRP_ENC) || defined(CONFIG_MXC_IPU_PRP_ENC_MODULE)
+			retval = prp_enc_select(cam);
+			if (retval)
+				break;
+#endif
+		}
+
+		mxc_capture_inputs[*index].status &= ~V4L2_IN_ST_NO_POWER;
+		cam->current_input = *index;
+		break;
+	}
+
 	case VIDIOC_ENUM_FMT:
 	case VIDIOC_TRY_FMT:
 	case VIDIOC_QUERYCTRL:
-	case VIDIOC_ENUMINPUT:
-	case VIDIOC_G_INPUT:
-	case VIDIOC_S_INPUT:
 	case VIDIOC_G_TUNER:
 	case VIDIOC_S_TUNER:
 	case VIDIOC_G_FREQUENCY:

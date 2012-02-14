@@ -226,6 +226,7 @@ static int lcdif_set_rate(struct clk *clk, u32 rate)
 	 * 108 * ns_cycle <= 875 * div
 	 */
 	u32 ns_cycle = 1000000 / rate;
+	ns_cycle *= 2; /* Fix calculate double frequency */
 	u32 div, reg_val;
 	u32 lowest_result = (u32) -1;
 	u32 lowest_div = 0, lowest_fracdiv = 0;
@@ -1331,6 +1332,22 @@ struct clk *clk_get_parent(struct clk *clk)
 }
 EXPORT_SYMBOL(clk_get_parent);
 
+static void clkctrl_enable_powersavings(void)
+{
+	HW_CLKCTRL_HBUS_SET(BM_CLKCTRL_HBUS_APBHDMA_AS_ENABLE);
+	HW_CLKCTRL_HBUS_SET(BM_CLKCTRL_HBUS_APBXDMA_AS_ENABLE);
+	HW_CLKCTRL_HBUS_SET(BM_CLKCTRL_HBUS_TRAFFIC_AS_ENABLE);
+	HW_CLKCTRL_HBUS_SET(BM_CLKCTRL_HBUS_TRAFFIC_JAM_AS_ENABLE);
+	HW_CLKCTRL_HBUS_SET(BM_CLKCTRL_HBUS_CPU_DATA_AS_ENABLE);
+	HW_CLKCTRL_HBUS_SET(BM_CLKCTRL_HBUS_CPU_INSTR_AS_ENABLE);
+	HW_CLKCTRL_HBUS_SET(BM_CLKCTRL_HBUS_DCP_AS_ENABLE);
+	HW_CLKCTRL_HBUS_SET(BM_CLKCTRL_HBUS_PXP_AS_ENABLE);
+
+	HW_CLKCTRL_HBUS_SET(BF_CLKCTRL_HBUS_SLOW_DIV(
+				BV_CLKCTRL_HBUS_SLOW_DIV__BY32));
+	HW_CLKCTRL_HBUS_SET(BM_CLKCTRL_HBUS_AUTO_SLOW_MODE);
+}
+
 static int __init clk_init(void)
 {
 	struct clk **clkp;
@@ -1365,6 +1382,7 @@ static int __init clk_init(void)
 		pr_debug("%s: clock %s, rate %d\n",
 			__func__, (*clkp)->name, (*clkp)->rate);
 	}
+	clkctrl_enable_powersavings();
 
 	return 0;
 }

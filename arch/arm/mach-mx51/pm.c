@@ -18,17 +18,38 @@
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/suspend.h>
+#include <linux/proc_fs.h>
+#include <linux/cpufreq.h>
+#include <mach/hardware.h>
+#include <asm/cacheflush.h>
+#include <asm/tlb.h>
+#include <asm/mach/map.h>
 #include "crm_regs.h"
+
+static struct cpu_wp *cpu_wp_tbl;
+static struct clk *cpu_clk;
+
+#if defined(CONFIG_CPU_FREQ)
+static int org_freq;
+extern int cpufreq_suspended;
+extern int set_cpu_freq(int wp);
+#endif
+
 
 static struct device *pm_dev;
 struct clk *gpc_dvfs_clk;
-extern void cpu_do_suspend_workaround(void);
+extern void cpu_do_suspend_workaround(u32 sdclk_iomux_addr);
 extern void cpu_cortexa8_do_idle(u32);
+extern struct cpu_wp *(*get_cpu_wp)(int *wp);
 
 extern int iram_ready;
+void *suspend_iram_base;
+void (*suspend_in_iram)(u32 sdclk_iomux_addr) = NULL;
 
 static int mx51_suspend_enter(suspend_state_t state)
 {
+	u32 sdclk_iomux_addr = IO_ADDRESS(IOMUXC_BASE_ADDR + 0x4b8);
+
 	if (gpc_dvfs_clk == NULL)
 		gpc_dvfs_clk = clk_get(NULL, "gpc_dvfs_clk");
 	/* gpc clock is needed for SRPG */
@@ -48,7 +69,12 @@ static int mx51_suspend_enter(suspend_state_t state)
 		return -EAGAIN;
 
 	if (state == PM_SUSPEND_MEM) {
-		cpu_do_suspend_workaround();
+		local_flush_tlb_all();
+		flush_cache_all();
+
+		/* Run the suspend code from iRAM. */
+		suspend_in_iram(sdclk_iomux_addr);
+
 		/*clear the EMPGC0/1 bits */
 		__raw_writel(0, MXC_SRPG_EMPGC0_SRPGCR);
 		__raw_writel(0, MXC_SRPG_EMPGC1_SRPGCR);
@@ -74,6 +100,21 @@ static int mx51_suspend_enter(suspend_state_t state)
  */
 static int mx51_suspend_prepare(void)
 {
+#if defined(CONFIG_CPU_FREQ)
+	struct cpufreq_freqs freqs;
+	org_freq = clk_get_rate(cpu_clk);
+	freqs.old = org_freq / 1000;
+	freqs.new = cpu_wp_tbl[0].cpu_rate / 1000;
+	freqs.cpu = 0;
+	freqs.flags = 0;
+
+	cpufreq_suspended = 1;
+	if (clk_get_rate(cpu_clk) != cpu_wp_tbl[0].cpu_rate) {
+		set_cpu_freq(cpu_wp_tbl[0].cpu_rate);
+		cpufreq_notify_transition(&freqs, CPUFREQ_PRECHANGE);
+		cpufreq_notify_transition(&freqs, CPUFREQ_POSTCHANGE);
+	}
+#endif
 	return 0;
 }
 
@@ -82,6 +123,22 @@ static int mx51_suspend_prepare(void)
  */
 static void mx51_suspend_finish(void)
 {
+#if defined(CONFIG_CPU_FREQ)
+	struct cpufreq_freqs freqs;
+
+	freqs.old = clk_get_rate(cpu_clk) / 1000;
+	freqs.new = org_freq / 1000;
+	freqs.cpu = 0;
+	freqs.flags = 0;
+
+	cpufreq_suspended = 0;
+
+	if (org_freq != clk_get_rate(cpu_clk)) {
+		set_cpu_freq(org_freq);
+		cpufreq_notify_transition(&freqs, CPUFREQ_PRECHANGE);
+		cpufreq_notify_transition(&freqs, CPUFREQ_POSTCHANGE);
+	}
+#endif
 }
 
 /*
@@ -120,13 +177,30 @@ static struct platform_driver mx51_pm_driver = {
 
 static int __init pm_init(void)
 {
+	int cpu_wp_nr;
+
 	pr_info("Static Power Management for Freescale i.MX51\n");
 	if (platform_driver_register(&mx51_pm_driver) != 0) {
 		printk(KERN_ERR "mx51_pm_driver register failed\n");
 		return -ENODEV;
 	}
 	suspend_set_ops(&mx51_suspend_ops);
+	/* Move suspend routine into iRAM */
+	suspend_iram_base = IO_ADDRESS(SUSPEND_IRAM_BASE_ADDR);
+	memcpy(suspend_iram_base, cpu_do_suspend_workaround, SZ_4K);
+	/* Need to remap the area here since we want the memory region
+		 to be executable. */
+	suspend_iram_base = __arm_ioremap(SUSPEND_IRAM_BASE_ADDR, SZ_4K,
+										MT_HIGH_VECTORS);
+	suspend_in_iram = (void *)suspend_iram_base;
 
+	cpu_wp_tbl = get_cpu_wp(&cpu_wp_nr);
+
+	cpu_clk = clk_get(NULL, "cpu_clk");
+	if (IS_ERR(cpu_clk)) {
+		printk(KERN_DEBUG "%s: failed to get cpu_clk\n", __func__);
+		return PTR_ERR(cpu_clk);
+	}
 	printk(KERN_INFO "PM driver module loaded\n");
 
 	return 0;

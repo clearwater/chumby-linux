@@ -19,6 +19,9 @@
 #include <mach/arc_otg.h>
 #include "usb.h"
 
+static void usbotg_pm_clock(bool on);
+static void _wake_up_enable(struct fsl_usb2_platform_data *pdata, bool enable);
+
 /*
  * platform data structs
  * 	- Which one to use is determined by CONFIG options in usb.h
@@ -32,6 +35,8 @@ static struct fsl_usb2_platform_data __maybe_unused dr_utmi_config = {
 	.power_budget      = 500,	/* 500 mA max power */
 	.gpio_usb_active   = gpio_usbotg_hs_active,
 	.gpio_usb_inactive = gpio_usbotg_hs_inactive,
+	.usb_clock_for_pm  = usbotg_pm_clock,
+	.wake_up_enable = _wake_up_enable,
 	.transceiver       = "utmi",
 };
 
@@ -42,7 +47,7 @@ static struct fsl_usb2_platform_data __maybe_unused dr_utmi_config = {
 static struct resource otg_resources[] = {
 	[0] = {
 		.start = (u32)(OTG_BASE_ADDR),
-		.end   = (u32)(OTG_BASE_ADDR + 0x1ff),
+		.end   = (u32)(OTG_BASE_ADDR + 0x620),
 		.flags = IORESOURCE_MEM,
 	},
 	[1] = {
@@ -111,15 +116,38 @@ static int usbotg_init_ext(struct platform_device *pdev)
 	return ret;
 }
 
-static void usbotg_uninit_ext(struct fsl_usb2_platform_data *pdata)
+static void usbotg_pm_clock(bool on)
 {
 	struct clk *usb_clk;
 
 	usb_clk = clk_get(NULL, "usb_phy_clk");
-	clk_disable(usb_clk);
+	/* close and open usb phy clock for suspend and resume */
+	if (on) {
+		clk_enable(usb_clk);
+	} else {
+		clk_disable(usb_clk);
+	}
 	clk_put(usb_clk);
+}
 
+static void usbotg_uninit_ext(struct fsl_usb2_platform_data *pdata)
+{
+	usbotg_pm_clock(false);
 	usbotg_uninit(pdata);
+}
+
+static void _wake_up_enable(struct fsl_usb2_platform_data *pdata, bool enable)
+{
+	if (get_usb_mode(pdata) == FSL_USB_DR_DEVICE) {
+		if (enable) {
+			USBCTRL |= (UCTRL_OWIE | UCTRL_VBUS_WKUP_EN);
+			USB_PHY_CTR_FUNC |= USB_UTMI_PHYCTRL_CONF2;
+		} else {
+			USBCTRL &= ~UCTRL_OWIE;
+			USBCTRL &= ~UCTRL_VBUS_WKUP_EN;
+			USB_PHY_CTR_FUNC &= ~USB_UTMI_PHYCTRL_CONF2;
+		}
+	}
 }
 
 static int __init usb_dr_init(void)
@@ -129,7 +157,7 @@ static int __init usb_dr_init(void)
 	dr_register_otg();
 	dr_register_host(otg_resources, ARRAY_SIZE(otg_resources));
 	dr_register_udc();
-
+	device_init_wakeup(&(dr_udc_device.dev), 1);
 	return 0;
 }
 

@@ -58,6 +58,7 @@
  * @ingroup MSL_MX37
  */
 extern void gpio_lcd_active(void);
+extern void mxc_init_srpgconfig(void);
 
 /* working point(wp): 0 - 532MHz; 1 - 200MHz; */
 static struct cpu_wp cpu_wp_auto[] = {
@@ -70,14 +71,6 @@ static struct cpu_wp cpu_wp_auto[] = {
 	 .mfn = 13,
 	 .cpu_voltage = 1050000,},
 	{
-	 .pll_rate = 400000000,
-	 .cpu_rate = 400000000,
-	 .pdf = 1,
-	 .mfi = 8,
-	 .mfd = 2,
-	 .mfn = 1,
-	 .cpu_voltage = 950000,},
-	{
 	 .pll_rate = 200000000,
 	 .cpu_rate = 200000000,
 	 .pdf = 3,
@@ -85,19 +78,11 @@ static struct cpu_wp cpu_wp_auto[] = {
 	 .mfd = 2,
 	 .mfn = 1,
 	 .cpu_voltage = 850000,},
-	{
-	 .pll_rate = 600000000,
-	 .cpu_rate = 600000000,
-	 .pdf = 0,
-	 .mfi = 6,
-	 .mfd = 3,
-	 .mfn = 1,
-	 .cpu_voltage = 1200000,},
 };
 
 struct cpu_wp *get_cpu_wp(int *wp)
 {
-	*wp = 3;
+	*wp = 2;
 	return cpu_wp_auto;
 }
 
@@ -253,13 +238,14 @@ static void lcd_reset(void)
 	/* active reset line GPIO */
 	if (!first) {
 		mxc_request_iomux(MX37_PIN_GPIO1_5, IOMUX_CONFIG_GPIO);
+		gpio_request(IOMUX_TO_GPIO(MX37_PIN_GPIO1_5), "gpio1_5");
 		first = 1;
 	}
-	mxc_set_gpio_dataout(MX37_PIN_GPIO1_5, 0);
-	mxc_set_gpio_direction(MX37_PIN_GPIO1_5, 0);
+	gpio_set_value(IOMUX_TO_GPIO(MX37_PIN_GPIO1_5), 0);
+	gpio_direction_output(IOMUX_TO_GPIO(MX37_PIN_GPIO1_5), 0);
 	/* do reset */
 	msleep(10);		/* tRES >= 100us */
-	mxc_set_gpio_dataout(MX37_PIN_GPIO1_5, 1);
+	gpio_set_value(IOMUX_TO_GPIO(MX37_PIN_GPIO1_5), 1);
 	msleep(60);
 }
 
@@ -405,7 +391,8 @@ static int __init mxc_init_touchscreen(void)
 	mxc_request_iomux(MX37_PIN_AUD5_RXFS, IOMUX_CONFIG_GPIO);
 	pad_val = PAD_CTL_PKE_ENABLE | PAD_CTL_100K_PU;
 	mxc_iomux_set_pad(MX37_PIN_AUD5_RXFS, pad_val);
-	mxc_set_gpio_direction(MX37_PIN_AUD5_RXFS, 1);
+	gpio_request(IOMUX_TO_GPIO(MX37_PIN_AUD5_RXFS), "aud5_rxfs");
+	gpio_direction_input(IOMUX_TO_GPIO(MX37_PIN_AUD5_RXFS));
 
 	return 0;
 }
@@ -559,8 +546,10 @@ static void mxc_unifi_hardreset(int pin_level)
 		regulator_put(gpo4);
 	} else {
 		mxc_request_iomux(MX37_PIN_AUD5_RXC, IOMUX_CONFIG_GPIO);
-		mxc_set_gpio_dataout(MX37_PIN_AUD5_RXC, pin_level & 0x01);
-		mxc_set_gpio_direction(MX37_PIN_AUD5_RXC, 0);
+		gpio_request(IOMUX_TO_GPIO(MX37_PIN_AUD5_RXC), "aud5_rxc");
+		gpio_set_value(IOMUX_TO_GPIO(MX37_PIN_AUD5_RXC),
+			       pin_level & 0x01);
+		gpio_direction_output(IOMUX_TO_GPIO(MX37_PIN_AUD5_RXC), 0);
 		mxc_free_iomux(MX37_PIN_AUD5_RXC, IOMUX_CONFIG_GPIO);
 	}
 }
@@ -703,8 +692,9 @@ static void bt_reset(void)
 		regulator_put(gpo4);
 	} else {
 		mxc_request_iomux(MX37_PIN_AUD5_RXC, IOMUX_CONFIG_GPIO);
-		mxc_set_gpio_dataout(MX37_PIN_AUD5_RXC, 1);
-		mxc_set_gpio_direction(MX37_PIN_AUD5_RXC, 0);
+		gpio_request(IOMUX_TO_GPIO(MX37_PIN_AUD5_RXC), "aud5_rxc");
+		gpio_set_value(IOMUX_TO_GPIO(MX37_PIN_AUD5_RXC), 1);
+		gpio_direction_output(IOMUX_TO_GPIO(MX37_PIN_AUD5_RXC), 0);
 	}
 }
 
@@ -813,7 +803,8 @@ static void mxc_init_sgtl5000(void)
 		return;
 	}
 	mxc_iomux_set_pad(pin, PAD_CTL_PKE_ENABLE | PAD_CTL_100K_PU);
-	mxc_set_gpio_direction(pin, 1);
+	gpio_request(IOMUX_TO_GPIO(pin), "aud5_rxfs");
+	gpio_direction_input(IOMUX_TO_GPIO(pin));
 
 	/* cko1 clock */
 	mxc_request_iomux(MX37_PIN_GPIO1_6, IOMUX_CONFIG_ALT2);
@@ -900,7 +891,8 @@ static void __init mxc_init_gps(void)
 static void __init mxc_board_init(void)
 {
 	mxc_cpu_common_init();
-	mxc_gpio_init();
+	mxc_init_srpgconfig();
+	mxc_register_gpios();
 	early_console_setup(saved_command_line);
 	mxc_init_devices();
 	if (!board_is_mx37(BOARD_REV_2))

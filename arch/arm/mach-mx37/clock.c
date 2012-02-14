@@ -362,6 +362,7 @@ static struct clk pll1_sw_clk = {
 static struct clk pll2_sw_clk = {
 	.name = "pll2",
 	.parent = &osc_clk,
+	.set_rate = _clk_pll_set_rate,
 	.recalc = _clk_pll_recalc,
 	.enable = _clk_pll_enable,
 	.disable = _clk_pll_disable,
@@ -493,9 +494,6 @@ static int _clk_main_bus_set_parent(struct clk *clk, struct clk *parent)
 	if (emi_intr_clk.usecount == 0)
 		emi_intr_clk.enable(&emi_intr_clk);
 
-	if (ipu_clk[0].usecount == 0)
-		ipu_clk[0].enable(&ipu_clk[0]);
-
 	if (parent == &pll2_sw_clk) {
 		reg = __raw_readl(MXC_CCM_CBCDR6) &
 		    ~MXC_CCM_CBCDR6_PERIPH_CLK_SEL;
@@ -522,9 +520,6 @@ static int _clk_main_bus_set_parent(struct clk *clk, struct clk *parent)
 		emi_slow_clk.disable(&emi_slow_clk);
 	if (emi_intr_clk.usecount == 0)
 		emi_intr_clk.disable(&emi_intr_clk);
-
-	if (ipu_clk[0].usecount == 0)
-		ipu_clk[0].enable(&ipu_clk[0]);
 
 	return 0;
 }
@@ -761,10 +756,6 @@ static int _clk_ahb_set_rate(struct clk *clk, unsigned long rate)
 	reg |= (div - 1) << MXC_CCM_CBCDR2_AHB_PODF_OFFSET;
 	__raw_writel(reg, MXC_CCM_CBCDR2);
 
-	/* Set the Load-dividers bit in CCM */
-	reg = __raw_readl(MXC_CCM_CCDR);
-	reg |= MXC_CCM_CCDR_LOAD_DIVIDERS;
-	__raw_writel(reg, MXC_CCM_CCDR);
 	clk->rate = rate;
 
 	return 0;
@@ -917,10 +908,6 @@ static struct clk emi_core_clk = {
 	.set_rate = _clk_emi_core_set_rate,
 	.round_rate = _clk_emi_core_round_rate,
 	.flags = RATE_PROPAGATES,
-	.enable_reg = MXC_CCM_CCGR5,
-	.enable_shift = MXC_CCM_CCGR5_CG11_OFFSET,
-	.enable = _clk_enable,
-	.disable = _clk_disable_inwait,
 };
 
 static struct clk ahbmux1_clk = {
@@ -2392,12 +2379,6 @@ static int _clk_ipu_enable(struct clk *clk)
 	reg = __raw_readl(MXC_CCM_CCDR);
 	reg &= ~MXC_CCM_CCDR_IPU_HS_MASK;
 	__raw_writel(reg, MXC_CCM_CCDR);
-
-	/* Handshake with IPU when LPM is entered as its enabled. */
-	reg = __raw_readl(MXC_CCM_CLPCR);
-	reg &= ~MXC_CCM_CLPCR_BYPASS_IPU_LPM_HS;
-	__raw_writel(reg, MXC_CCM_CLPCR);
-
 	return 0;
 }
 
@@ -2410,11 +2391,6 @@ static void _clk_ipu_disable(struct clk *clk)
 	reg = __raw_readl(MXC_CCM_CCDR);
 	reg |= MXC_CCM_CCDR_IPU_HS_MASK;
 	__raw_writel(reg, MXC_CCM_CCDR);
-
-	/* No handshake with IPU when LPM is entered as its not enabled. */
-	reg = __raw_readl(MXC_CCM_CLPCR);
-	reg |= MXC_CCM_CLPCR_BYPASS_IPU_LPM_HS;
-	__raw_writel(reg, MXC_CCM_CLPCR);
 }
 
 static int _clk_ipu_set_parent(struct clk *clk, struct clk *parent)
@@ -2873,6 +2849,19 @@ static void clk_tree_init(void)
 {
 	u32 reg, dp_ctl;
 
+	ipg_perclk.set_parent(&ipg_perclk, &lp_apm_clk);
+
+	/*
+	 *Initialise the IPG PER CLK dividers to 3. IPG_PER_CLK should be at
+	 * 8MHz, its derived from lp_apm.
+	 */
+	reg = __raw_readl(MXC_CCM_CBCDR2);
+	reg &= ~MXC_CCM_CBCDR2_PERCLK_PRED1_MASK;
+	reg &= ~MXC_CCM_CBCDR2_PERCLK_PRED2_MASK;
+	reg &= ~MXC_CCM_CBCDR2_PERCLK_PODF_MASK;
+	reg |= (2 << MXC_CCM_CBCDR2_PERCLK_PRED1_OFFSET);
+	__raw_writel(reg, MXC_CCM_CBCDR2);
+
 	/* set pll1_main_clk parent */
 	pll1_main_clk.parent = &osc_clk;
 	dp_ctl = __raw_readl(pll_base[0] + MXC_PLL_DP_CTL);
@@ -2926,11 +2915,6 @@ int __init mxc_clocks_init(unsigned long ckil, unsigned long osc, unsigned long 
 	u32 reg;
 	int i;
 
-#ifdef CONFIG_JTAG_ENABLE
-	mxc_jtag_enabled = 1;
-#else
-	mxc_jtag_enabled = 0;
-#endif
 	/* Turn off all possible clocks */
 	if (mxc_jtag_enabled) {
 		__raw_writel((1 << MXC_CCM_CCGR0_CG0_OFFSET) |
@@ -2955,7 +2939,6 @@ int __init mxc_clocks_init(unsigned long ckil, unsigned long osc, unsigned long 
 	reg |= 1 << MXC_CCM_CCGR1_CG0_OFFSET;
 	reg |= 1 << MXC_CCM_CCGR1_CG1_OFFSET;
 	__raw_writel(reg, MXC_CCM_CCGR1);
-
 	__raw_writel(0, MXC_CCM_CCGR2);
 	__raw_writel(0, MXC_CCM_CCGR3);
 	__raw_writel(0, MXC_CCM_CCGR4);
@@ -3051,9 +3034,6 @@ int __init mxc_clocks_init(unsigned long ckil, unsigned long osc, unsigned long 
 	clk_set_parent(&vpu_clk[0], &axi_a_clk);
 	clk_set_parent(&vpu_clk[1], &axi_a_clk);
 
-	clk_set_parent(&emi_core_clk, &ahb_clk);
-	clk_set_rate(&emi_core_clk, clk_round_rate(&emi_core_clk, 130000000));
-	propagate_rate(&emi_core_clk);
 	clk_set_rate(&emi_intr_clk, clk_round_rate(&emi_intr_clk, 66000000));
 	/* Change the NFC clock rate to be 1:3 ratio with emi clock. */
 	clk_set_rate(&nfc_clk, clk_round_rate(&nfc_clk,
@@ -3061,8 +3041,11 @@ int __init mxc_clocks_init(unsigned long ckil, unsigned long osc, unsigned long 
 
 	clk_set_parent(&usb_phy_clk, &osc_clk);
 
+	clk_set_parent(&periph_apm_clk, &lp_apm_clk);
+
 	clk_set_parent(&cko1_clk, &ipg_perclk);
 	clk_set_rate(&cko1_clk, 8000000);
+
 	/* Set the current working point. */
 	cpu_wp_tbl = get_cpu_wp(&cpu_wp_nr);
 	for (i = 0; i < cpu_wp_nr; i++) {
