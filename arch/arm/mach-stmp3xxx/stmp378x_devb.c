@@ -346,7 +346,6 @@ static void __init stmp378x_devb_init(void)
 	stmp3xxx_set_mmc_data(&stmp3xxx_mmc.dev);
 	stmp3xxx_gpmi.dev.platform_data = &gpmi_partitions;
 	bend_sensor.dev.platform_data = &keyboard_data;
-	stmp3xxx_keyboard.dev.platform_data = &keyboard_data;
 
 	spi_register_board_info(spi_board_info, ARRAY_SIZE(spi_board_info));
 	stmp3xxx_ssp1_device_register();	/* MMC or SSP */
