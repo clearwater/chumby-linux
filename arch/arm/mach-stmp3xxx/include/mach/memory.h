@@ -60,7 +60,9 @@ static inline void __arch_adjust_zones(int node, unsigned long *zone_size,
 
 #define ISA_DMA_THRESHOLD	(0x0003ffffULL)
 
-// Chumby
+/*
+ * Chumby
+ */
 #define CONSISTENT_DMA_SIZE	SZ_8M
 
 #endif
