@@ -104,7 +104,7 @@ static struct platform_device *devices[] = {
 	&stmp3xxx_dcp,
 //	&stmp3xxx_mtest,
 	&stmp3xxx_battery,
-	&stmp3xxx_pxp,
+//	&stmp3xxx_pxp,
 	&stmp3xxx_viim,
 };
 
