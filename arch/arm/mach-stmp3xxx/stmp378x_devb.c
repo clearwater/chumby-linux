@@ -346,10 +346,6 @@ static void __init stmp378x_devb_init(void)
 	stmp3xxx_set_mmc_data(&stmp3xxx_mmc.dev);
 	stmp3xxx_gpmi.dev.platform_data = &gpmi_partitions;
 	bend_sensor.dev.platform_data = &keyboard_data;
-	udata = stmp3xxx_udc.dev.platform_data;
-	udata->platform_init = usb_phy_enable;
-	udata = stmp3xxx_ehci.dev.platform_data;
-	udata->platform_init = usb_phy_enable;
 	stmp3xxx_keyboard.dev.platform_data = &keyboard_data;
 
 	spi_register_board_info(spi_board_info, ARRAY_SIZE(spi_board_info));
@@ -372,6 +368,7 @@ static int __init chumbyrev_setup(char *str)
 {
 	global_chumbyrev = simple_strtoul(str, NULL, 16);
 	printk("Detected chumby version %d (from str %s)\n", global_chumbyrev, str);
+	return 0;
 }
 
 __setup("chumbyrev=", chumbyrev_setup);

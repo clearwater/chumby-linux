@@ -90,6 +90,6 @@ extern int stmp3xxx_ssp2_device_register(void);
 extern int spdif_pinmux_request(void);
 extern void spdif_pinmux_release(void);
 
-extern int get_evk_board_version();
+extern int get_evk_board_version(void);
 
 #endif /* __ASM_PLAT_STMP3XXX_H */
