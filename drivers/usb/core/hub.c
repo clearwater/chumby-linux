@@ -888,6 +888,13 @@ static int hub_configure(struct usb_hub *hub,
 		message = "can't read hub descriptor";
 		goto fail;
 	} else if (hub->descriptor->bNbrPorts > USB_MAXCHILDREN) {
+  	        dev_info(hub_dev, "bDescLength=%d\n", hub->descriptor->bDescLength);
+  	        dev_info(hub_dev, "bDescriptorType=%d\n", hub->descriptor->bDescriptorType);
+	        dev_info(hub_dev, "bNbrPorts=%d\n", hub->descriptor->bNbrPorts);
+  	        dev_info(hub_dev, "bHubCharacteristics=%d\n", hub->descriptor->wHubCharacterstics);
+  	        dev_info(hub_dev, "bPwrOn2PwrGood=%d\n", hub->descriptor->bPwrOn2PwrGood);
+		dev_info(hub_dev, "DeviceRemovable=%d\n", hub->descriptor->DeviceRemovable);
+		dev_info(hub_dev, "PortPwrCtrlMask=%d\n", hub->descriptor->PortPwrCtrlMask);
 		message = "hub has too many ports!";
 		ret = -ENODEV;
 		goto fail;
