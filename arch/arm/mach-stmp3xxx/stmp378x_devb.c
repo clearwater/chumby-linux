@@ -93,7 +93,7 @@ static struct platform_device *devices[] = {
 	&stmp3xxx_backlight,
 	&bend_sensor,
 	&stmp3xxx_touchscreen,
-//	&stmp3xxx_appuart,
+	&stmp3xxx_appuart,
 	&stmp3xxx_dbguart,
 	&stmp3xxx_watchdog,
 	&stmp3xxx_rtc,

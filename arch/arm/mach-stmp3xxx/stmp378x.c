@@ -324,14 +324,17 @@ struct pin_desc appuart_pins_0[] = {
 	{ PINID_AUART1_TX, PIN_FUN1, PIN_4MA, PIN_1_8V, 0, },
 };
 
-#if 0 /* temporary ? */
+#define PINID_AUART2_CTS STMP3XXX_PINID(2, 8)
+#define PINID_AUART2_RTS STMP3XXX_PINID(2, 7)
+#define PINID_AUART2_RX  STMP3XXX_PINID(0,14)
+#define PINID_AUART2_TX  STMP3XXX_PINID(0,15)
+
 struct pin_desc appuart_pins_1[] = {
-	{ PINID_AUART2_CTS, PIN_FUN1, PIN_4MA, PIN_1_8V, 0, },
-	{ PINID_AUART2_RTS, PIN_FUN1, PIN_4MA, PIN_1_8V, 0, },
-	{ PINID_AUART2_RX, PIN_FUN1, PIN_4MA, PIN_1_8V, 0, },
-	{ PINID_AUART2_TX, PIN_FUN1, PIN_4MA, PIN_1_8V, 0, },
+	{ PINID_AUART2_CTS, PIN_FUN2, PIN_4MA, PIN_1_8V, 0, },
+	{ PINID_AUART2_RTS, PIN_FUN2, PIN_4MA, PIN_1_8V, 0, },
+	{ PINID_AUART2_RX,  PIN_FUN2, PIN_4MA, PIN_1_8V, 0, },
+	{ PINID_AUART2_TX,  PIN_FUN2, PIN_4MA, PIN_1_8V, 0, },
 };
-#endif
 
 struct pin_group appuart_pins[] = {
 	[0] = {
@@ -339,10 +342,8 @@ struct pin_group appuart_pins[] = {
 		.nr_pins	= ARRAY_SIZE(appuart_pins_0),
 	},
 	[1] = {
-#if 0		/* undefined yet. */
 		.pins		= appuart_pins_1,
 		.nr_pins	= ARRAY_SIZE(appuart_pins_1),
-#endif
 	},
 };
 
