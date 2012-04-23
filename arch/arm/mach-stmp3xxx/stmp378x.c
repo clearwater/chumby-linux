@@ -317,19 +317,21 @@ unsigned stmp378x_lcd_spi_pins[] = {
 	[SPI_CS] = PINID_LCD_CS,
 };
 
+#if 0
 struct pin_desc appuart_pins_0[] = {
 	{ PINID_AUART1_CTS, PIN_FUN1, PIN_4MA, PIN_1_8V, 0, },
 	{ PINID_AUART1_RTS, PIN_FUN1, PIN_4MA, PIN_1_8V, 0, },
 	{ PINID_AUART1_RX, PIN_FUN1, PIN_4MA, PIN_1_8V, 0, },
 	{ PINID_AUART1_TX, PIN_FUN1, PIN_4MA, PIN_1_8V, 0, },
 };
+#endif
 
 #define PINID_AUART2_CTS STMP3XXX_PINID(2, 8)
 #define PINID_AUART2_RTS STMP3XXX_PINID(2, 7)
 #define PINID_AUART2_RX  STMP3XXX_PINID(0,14)
 #define PINID_AUART2_TX  STMP3XXX_PINID(0,15)
 
-struct pin_desc appuart_pins_1[] = {
+struct pin_desc appuart_pins_0[] = {
 	{ PINID_AUART2_CTS, PIN_FUN2, PIN_4MA, PIN_1_8V, 0, },
 	{ PINID_AUART2_RTS, PIN_FUN2, PIN_4MA, PIN_1_8V, 0, },
 	{ PINID_AUART2_RX,  PIN_FUN2, PIN_4MA, PIN_1_8V, 0, },
@@ -338,12 +340,14 @@ struct pin_desc appuart_pins_1[] = {
 
 struct pin_group appuart_pins[] = {
 	[0] = {
-		.pins		= appuart_pins_0,
-		.nr_pins	= ARRAY_SIZE(appuart_pins_0),
-	},
-	[1] = {
 		.pins		= appuart_pins_1,
 		.nr_pins	= ARRAY_SIZE(appuart_pins_1),
+	},
+	[1] = {
+#if 0
+		.pins		= appuart_pins_1,
+		.nr_pins	= ARRAY_SIZE(appuart_pins_1),
+#end
 	},
 };
 
