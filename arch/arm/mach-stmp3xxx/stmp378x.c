@@ -340,8 +340,8 @@ struct pin_desc appuart_pins_0[] = {
 
 struct pin_group appuart_pins[] = {
 	[0] = {
-		.pins		= appuart_pins_1,
-		.nr_pins	= ARRAY_SIZE(appuart_pins_1),
+		.pins		= appuart_pins_0,
+		.nr_pins	= ARRAY_SIZE(appuart_pins_0),
 	},
 	[1] = {
 #if 0
